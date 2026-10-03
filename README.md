@@ -1,6 +1,6 @@
 # Command Gate V2
 
-Native Bash review for OpenCode **2.0.22**, using the existing `aar` Command Reviewer. This implementation supports automatic allow/deny and same-call **Deny / Allow once / Trust exact for session**, with failure/cancellation/concurrency regression coverage. RTK composition and packed-release verification remain separate tickets.
+Native Bash review for OpenCode **2.0.22**, using the existing `aar` Command Reviewer. This implementation supports automatic allow/deny, optional pre-review RTK rewriting and same-call **Deny / Allow once / Trust exact for session**, with failure/cancellation/concurrency and invocation-integrity regression coverage. Packed-release verification remains a separate ticket.
 
 ## Approval
 
@@ -51,7 +51,7 @@ Reviewer reservation expiry still applies: a response arriving before the human 
 
 The default `onReviewerFailure: "deny"` keeps interception loaded when doctor is unhealthy or the binary is missing/incompatible. Invalid options always deny. Explicit `"passthrough"` permits operational Reviewer failures only, labelled **UNREVIEWED** in server diagnostics and a TUI warning fetched through public status RPC. Reviewer deny/ask, stale context, failed approval/grant, native deny, unsupported Bash/background invocation and invalid configuration never become passthrough.
 
-Gate-owned Reviewer operations are deadline-bound. On cancellation/deadline, POSIX Reviewer process groups receive SIGKILL (including descendants); the Effect finalizer joins subprocess close before releasing review state. Native command execution and its supervision remain entirely with OpenCode. Unload interrupts the wrapped native Effect, including pre-spawn permission waits; any already-running native process is cancelled by host supervision, never by a Gate spawner. RTK is disabled until ticket 06, so no rewriter process exists in this slice. Pending human waits remove timers/abort listeners on every terminal response, and plugin unload closes them and signals outstanding reviews. Captured old tool wrappers refuse after unload instead of executing without their removed shell hook. Restart/reload still resets persisted trust before first review.
+Gate-owned Reviewer and RTK operations are deadline-bound. On cancellation/deadline, POSIX subprocess groups receive SIGKILL (including descendants); the Effect finalizer joins subprocess close before releasing review state. Native command execution and its supervision remain entirely with OpenCode. Unload interrupts the wrapped native Effect, including pre-spawn permission waits; any already-running native process is cancelled by host supervision, never by a Gate spawner. Pending human waits remove timers/abort listeners on every terminal response, and plugin unload closes them and signals outstanding reviews. Captured old tool wrappers refuse after unload instead of executing without their removed shell hook. Restart/reload still resets persisted trust before first review.
 
 **Accepted fail-open gap:** an absent, disabled or failed-to-load plugin cannot intercept native commands. Inventory alone does not prove protection; inspect doctor/operational diagnostics. This is distinct from a loaded-but-unhealthy Gate, which denies by default.
 
@@ -63,7 +63,17 @@ Every public user admission, including plugin/subagent `session.prompt`, is auth
 
 New admission, canonical Goal replacement/clear, native `/clear` and session deletion invalidate grants, pending approvals and deny suppression. Parent changes conservatively invalidate known descendants. Native `/clear` uses a public TUI keymap bridge: Reviewer invalidation must succeed before dispatching the native command; an unavailable bridge disables the approval adapter. Tab close and turn idle do not end the session. Server restart/location reload resets persisted Reviewer authorization before first review; a new or expired client connection conservatively resets known sessions. Live-event notifications are not the sole source of authorization: context generation is reconciled before review, reply and continuation.
 
-**Supported composition:** native Bash tool execution with the Gate wrapper intact and no later material command/cwd/env/shell mutator. Human `!command` bypasses review; non-shell tools are untouched. Background mode and non-Bash shells refuse. A missing/disabled/unloaded Gate does not protect the host's shell.
+## RTK and invocation integrity
+
+Server options `commandRewriter: "none" | "rtk"` (default `"none"`) and `rewriterPath` (default `"rtk"`) also accept `AAR_GATE_COMMAND_REWRITER` and `AAR_GATE_REWRITER_PATH`; explicit options win. RTK is a trusted optimizer, not a safety dependency. Gate invokes the binary as `rtk rewrite <whole-command>` with `shell: false`, actual cwd and an allowlisted optimizer environment (PATH/HOME/PWD, no provider keys or session secrets). It never executes the submitted command during rewriting. Successful non-empty trimmed stdout becomes the Verbatim review subject and native command. Missing RTK, empty output, non-zero exit, oversized output or deadline failure keep the original command and still require the ordinary Reviewer Decision. Cancellation stops the call, not a fallback execution.
+
+**Installation requirements:** disable every other RTK/rewrite plugin for covered native tools; Gate alone owns their rewrite. Keep its native execute wrapper intact. Tool-input edits before that wrapper and shell edits before Gate's shell review are reviewed as final facts, not as the model's initial arguments. Actual canonical cwd, session material env (HOME/CDPATH/PWD when present) and Bash come from shell creation, not the plugin process environment. The checked native composition retains the host's permission checks, scanner, streaming and executor.
+
+After review, Gate guards the same shell invocation's command/cwd/shell/env properties and a copied environment against controlled late mutations. Changed writes refuse before start with a model-facing error rather than reuse allow. The host may reassign identical top-level properties, canonicalize cwd to the already-reviewed canonical directory, and add its four native metadata values (`AGENT=1`, `OPENCODE=1`, default `AI_AGENT=opencode`, owning `OPENCODE_SESSION_ID`); these are not material Reviewer facts. Other env-property writes refuse even when assigning the existing value. The guards also apply to explicit UNREVIEWED passthrough. Background is checked both in tool-before and at wrapped native execute, so a later tool-before hook cannot enable it.
+
+**Unsupported composition:** late shell command/cwd/env/shell mutators, second RTK rewrite, removal/replacement of the Gate wrapper, custom executors, and plugins that replace the hook payload, suppress guard failures or dispatch outside the native tool seam. Known late mutation fixtures refuse; arbitrary malicious/unknown plugin compositions are not contained or proven safe. Configured list order alone is not proof of registration order or compatibility: validate a new composition with native marker/output traces. No claim that Gate is always the final hook is made.
+
+Reviewer remains Bash-only; sh/zsh/fish/PowerShell and explicit native background mode refuse before start, without changing the selected shell after allow. Background syntax and hidden long-lived effects inside a program remain existing Reviewer policy, not a new Gate parser or containment guarantee. Human `!command` is neither reviewed nor rewritten (tests exercise its server shell API, not typed TUI input). Non-shell tools, MCP, arbitrary Code Mode code and other plugin processes are outside coverage. Child native shell calls are covered at the proven common seam; not every nested dispatch form has been demonstrated.
 
 ## Verification
 
@@ -76,6 +86,7 @@ pnpm test:approval
 node --test test/lifecycle.test.mjs test/tui-actions.test.mjs
 node --test test/tui-layout.test.mjs
 node --test test/failures.test.mjs test/cancellation.test.mjs test/concurrency.test.mjs
+node --test test/rtk.test.mjs test/integrity.test.mjs
 GATE_HUMAN=1 node --test test/human.test.mjs
 ```
 

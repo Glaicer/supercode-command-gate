@@ -54,7 +54,7 @@ test("empty binaryPath is a configuration error", () => {
   );
 });
 
-test("explicit failure modes are accepted; unknown modes and unimplemented rewrites refuse", () => {
+test("explicit failure modes and RTK are accepted; unknown modes refuse", () => {
   assert.equal(resolveConfig({}, {}).onReviewerFailure, "deny");
   const passthrough = resolveConfig({ onReviewerFailure: "passthrough" }, {});
   assert.equal(passthrough.configError, null);
@@ -63,10 +63,27 @@ test("explicit failure modes are accepted; unknown modes and unimplemented rewri
     String(resolveConfig({ onReviewerFailure: "yes" }, {}).configError),
     /must be deny/,
   );
-  assert.match(
-    String(resolveConfig({ commandRewriter: "rtk" }, {}).configError),
-    /not available in this build/,
+  const rtk = resolveConfig(
+    { commandRewriter: "rtk", rewriterPath: "/opt/rtk" },
+    {},
   );
+  assert.equal(rtk.configError, null);
+  assert.equal(rtk.commandRewriter, "rtk");
+  assert.equal(rtk.rewriterPath, "/opt/rtk");
+  assert.match(
+    String(resolveConfig({ commandRewriter: "unknown" }, {}).configError),
+    /must be none or rtk/,
+  );
+  assert.match(
+    String(resolveConfig({ rewriterPath: "" }, {}).configError),
+    /non-empty string/,
+  );
+  const fromEnv = resolveConfig(
+    {},
+    { AAR_GATE_COMMAND_REWRITER: "rtk", AAR_GATE_REWRITER_PATH: "/env/rtk" },
+  );
+  assert.equal(fromEnv.commandRewriter, "rtk");
+  assert.equal(fromEnv.rewriterPath, "/env/rtk");
   assert.equal(
     resolveConfig({ onReviewerFailure: "deny", commandRewriter: "none" }, {})
       .configError,

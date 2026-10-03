@@ -155,6 +155,7 @@ function runReviewer(
     stdin?: string;
     signal?: AbortSignal;
   },
+  decode: (stdout: string) => unknown = parseSingleDecisionLine,
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     if (options.signal?.aborted) {
@@ -228,7 +229,7 @@ function runReviewer(
         return;
       }
       try {
-        finish(null, parseSingleDecisionLine(stdout));
+        finish(null, decode(stdout));
       } catch (error) {
         finish(error instanceof Error ? error : new Error(String(error)));
       }
@@ -238,6 +239,30 @@ function runReviewer(
     }, options.timeoutMs);
     child.stdin.end(options.stdin);
   });
+}
+
+export async function callRewrite(
+  binaryPath: string,
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<string> {
+  return (await runReviewer(
+    binaryPath,
+    ["rewrite", command],
+    {
+      cwd,
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        HOME: process.env.HOME ?? "",
+        PWD: cwd,
+      },
+      timeoutMs,
+      signal,
+    },
+    (stdout) => stdout.trim(),
+  )) as string;
 }
 
 export function callCheck(

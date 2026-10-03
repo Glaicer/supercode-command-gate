@@ -20,6 +20,7 @@ import {
   runGrantRaceCases,
 } from "./concurrency-driver.mjs";
 
+import { runRtkCases } from "./rtk-driver.mjs";
 const exec = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const gateDir = path.dirname(here);
@@ -179,6 +180,81 @@ export async function runSeam(options = {}) {
 
   const evidence = { version, root, reviewerCommit };
   try {
+    if (options.integrity) {
+      cases = [
+        "late-tool",
+        "late-background",
+        "late-shell-command",
+        "late-shell-cwd",
+        "late-shell-env",
+        "late-shell-replace-env",
+        "late-shell-shell",
+      ].map((name) => ({
+        name,
+        call: { tool: "shell", arguments: { command: `touch ${name}.marker` } },
+        marker: `${name}.marker`,
+      }));
+      evidence.integrity = await boot({
+        name: "integrity",
+        root: `${root}/integrity`,
+        baseURL,
+        aar,
+        modelRequests,
+        cases,
+        integrity: true,
+      });
+      cases = [
+        {
+          name: "early-shell",
+          call: {
+            tool: "shell",
+            arguments: { command: "touch early-shell.marker" },
+          },
+          marker: "other/early-shell.marker",
+        },
+        ...["sh", "zsh", "fish", "pwsh"].map((shell) => ({
+          name: `unsupported-${shell}`,
+          call: {
+            tool: "shell",
+            arguments: { command: `touch unsupported-${shell}.marker` },
+          },
+          marker: `unsupported-${shell}.marker`,
+        })),
+      ];
+      evidence.early = await boot({
+        name: "early",
+        root: `${root}/early`,
+        baseURL,
+        aar,
+        modelRequests,
+        cases,
+        integrityBefore: true,
+      });
+      await writeFile(
+        `${root}/results.json`,
+        JSON.stringify(evidence, null, 2),
+      );
+      console.log(`Integrity evidence: ${root}/results.json`);
+      return evidence;
+    }
+    if (options.rtk) {
+      evidence.rtk = await runRtkCases({
+        root,
+        boot,
+        setCases: (value) => {
+          cases = value;
+        },
+        baseURL,
+        aar,
+        modelRequests,
+      });
+      await writeFile(
+        `${root}/results.json`,
+        JSON.stringify(evidence, null, 2),
+      );
+      console.log(`RTK evidence: ${root}/results.json`);
+      return evidence;
+    }
     if (options.grantRaces) {
       cases = [
         "race-goal",
@@ -897,11 +973,13 @@ async function boot(config) {
     `${root}/config/opencode/opencode.json`,
     JSON.stringify({
       plugins: [
+        ...(config.integrityBefore ? [`${here}/integrity-fixture`] : []),
         {
           package: gateDir,
           options: { binaryPath, ...(config.pluginOptions ?? {}) },
         },
         ...(config.lifecycle ? [`${here}/admission-fixture`] : []),
+        ...(config.integrity ? [`${here}/integrity-fixture`] : []),
       ],
       model: "proof-local/probe",
       providers: {

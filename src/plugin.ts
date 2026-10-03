@@ -16,6 +16,7 @@ import {
   callAction,
   callCheck,
   callDoctor,
+  callRewrite,
   fingerprintFor,
   normalizeDoctorResult,
   validateDecision,
@@ -51,6 +52,54 @@ const allow = (request: Request, decision: Decision): ReviewOutcome => ({
   request,
   decision,
 });
+function sealInvocation(invocation: ShellCreateBefore, request: Request): void {
+  const refuse = (field: string): never => {
+    throw new ToolError({
+      message: blockedMessage(
+        `late mutation changed reviewed invocation ${field}; disable the conflicting shell mutator`,
+      ),
+    });
+  };
+  const nativeMetadata: Record<string, string> = {
+    AGENT: "1",
+    OPENCODE: "1",
+    AI_AGENT: "opencode",
+    OPENCODE_SESSION_ID: request.session.id,
+  };
+  const env = new Proxy(
+    { ...invocation.env },
+    {
+      set: (target, key, value) => {
+        if (
+          typeof key === "string" &&
+          Object.hasOwn(nativeMetadata, key) &&
+          value === nativeMetadata[key]
+        )
+          return Reflect.set(target, key, value);
+        return refuse(`env.${String(key)}`);
+      },
+      deleteProperty: (_target, key) => refuse(`env.${String(key)}`),
+      defineProperty: (_target, key) => refuse(`env.${String(key)}`),
+      setPrototypeOf: () => refuse("env prototype"),
+    },
+  );
+  for (const key of ["command", "cwd", "shell", "env"] as const) {
+    let value = key === "env" ? env : invocation[key];
+    Object.defineProperty(invocation, key, {
+      enumerable: true,
+      configurable: false,
+      get: () => value,
+      set: (next: unknown) => {
+        if (next === value) return;
+        if (key === "cwd" && next === request.cwd) {
+          value = request.cwd;
+          return;
+        }
+        refuse(key);
+      },
+    });
+  }
+}
 
 type Attempt<A> = { ok: true; value: A } | { ok: false; reason: string };
 
@@ -399,6 +448,19 @@ export default Plugin.define({
               `unsupported shell ${invocation.shell}; Command Gate reviews Bash only`,
             );
           }
+          if (config.commandRewriter === "rtk" && !config.configError) {
+            const rewritten = yield* attemptPromise((signal) =>
+              callRewrite(
+                config.rewriterPath,
+                invocation.command,
+                invocation.cwd,
+                config.timeoutMs,
+                signal,
+              ),
+            );
+            if (rewritten.ok && rewritten.value !== "")
+              invocation.command = rewritten.value;
+          }
           const prior: AuthorizingRecord | null = state.claim({
             ...call,
             command: invocation.command,
@@ -466,6 +528,7 @@ export default Plugin.define({
             command: request.command,
             cwd: request.cwd,
             env: request.env,
+            shell: invocation.shell,
             intentId: request.session.intentId,
             goal: request.intent.goal,
           };
@@ -700,17 +763,25 @@ export default Plugin.define({
           editor.update(item.id, (tool) => {
             const execute = tool.execute;
             tool.execute = (input, call) =>
-              Effect.suspend(() =>
-                active
-                  ? execute(input, call)
-                  : Effect.fail(
-                      new ToolError({
-                        message: blockedMessage(
-                          "Command Gate was unloaded; retry with a loaded Gate",
-                        ),
-                      }),
-                    ),
-              ).pipe(
+              Effect.suspend(() => {
+                if (!active)
+                  return Effect.fail(
+                    new ToolError({
+                      message: blockedMessage(
+                        "Command Gate was unloaded; retry with a loaded Gate",
+                      ),
+                    }),
+                  );
+                if ((input as { background?: unknown })?.background === true)
+                  return Effect.fail(
+                    new ToolError({
+                      message: blockedMessage(
+                        "background execution is outside Command Gate coverage in this release",
+                      ),
+                    }),
+                  );
+                return execute(input, call);
+              }).pipe(
                 Effect.raceFirst(
                   Deferred.await(shutdown).pipe(
                     Effect.flatMap(() =>
@@ -787,6 +858,7 @@ export default Plugin.define({
             lock = Semaphore.makeUnsafe(1);
             locks.set(call.sessionID, lock);
           }
+          const shell = invocation.shell;
           const outcome = yield* Effect.raceFirst(
             lock.withPermit(reviewInvocation(invocation, call)),
             Deferred.await(shutdown).pipe(
@@ -797,6 +869,26 @@ export default Plugin.define({
             return yield* Effect.die(
               new ToolError({ message: outcome.message }),
             );
+          const fresh = buildRequest(
+            invocation,
+            {
+              sessionID: call.sessionID,
+              intentId: outcome.request.session.intentId,
+              goal: outcome.request.intent.goal,
+              latestUserRequest: outcome.request.intent.latestUserRequest,
+            },
+            ctx.location.directory,
+          );
+          if (
+            invocation.shell !== shell ||
+            JSON.stringify(fresh) !== JSON.stringify(outcome.request)
+          )
+            return yield* Effect.die(
+              new ToolError({
+                message: blockedMessage("invocation changed during review"),
+              }),
+            );
+          sealInvocation(invocation, outcome.request);
         }),
       );
 

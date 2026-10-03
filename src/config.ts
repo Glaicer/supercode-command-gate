@@ -9,6 +9,8 @@ export type GateConfig = {
   timeoutMs: number;
   approvalTimeoutMs: number;
   onReviewerFailure: "deny" | "passthrough";
+  commandRewriter: "none" | "rtk";
+  rewriterPath: string;
   configError: string | null;
 };
 
@@ -66,19 +68,21 @@ export function resolveConfig(
   const commandRewriter = normalizeText(
     options.commandRewriter ?? env.AAR_GATE_COMMAND_REWRITER ?? "none",
   );
-  if (commandRewriter !== "none") {
-    errors.push(
-      commandRewriter === "rtk"
-        ? "commandRewriter rtk is not available in this build yet; rewrites stay disabled"
-        : "commandRewriter must be none",
-    );
-  }
+  if (!["none", "rtk"].includes(commandRewriter))
+    errors.push("commandRewriter must be none or rtk");
+  const rawRewriterPath =
+    options.rewriterPath ?? env.AAR_GATE_REWRITER_PATH ?? "rtk";
+  const rewriterPath =
+    typeof rawRewriterPath === "string" ? rawRewriterPath.trim() : "";
+  if (!rewriterPath) errors.push("rewriterPath must be a non-empty string");
 
   return {
     binaryPath: binaryPath === "" ? "aar" : binaryPath,
     tools,
     timeoutMs,
     approvalTimeoutMs,
+    commandRewriter: commandRewriter === "rtk" ? "rtk" : "none",
+    rewriterPath: rewriterPath || "rtk",
     onReviewerFailure:
       onReviewerFailure === "passthrough" ? "passthrough" : "deny",
     configError: errors.length === 0 ? null : errors.join("; "),
