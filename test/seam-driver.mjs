@@ -36,7 +36,7 @@ export const COMPOUND_ALLOW_COMMAND =
 
 export const INVOCATION_COMMAND = "touch invocation.marker";
 
-export async function runSeam() {
+export async function runSeam(options = {}) {
   const version = (await exec(opencode, ["--version"])).stdout
     .trim()
     .replace(/^opencode v/, "");
@@ -71,11 +71,23 @@ export async function runSeam() {
           affectsProtectedPaths: true,
           evidence: "Deterministic fake assessment for the Command Gate seam",
         };
-        const risks = text.includes("fixture-deny")
-          ? [risk]
-          : text.includes("fixture-ask")
+        const varying = ["denial-allow.marker", "denial-recovery.marker"].find(
+          (marker) => text.includes(marker),
+        );
+        const attempt = varying
+          ? assessorRequests.filter((request) =>
+              JSON.stringify(request.messages).includes(varying),
+            ).length
+          : 0;
+        const risks = varying
+          ? attempt === 1
             ? [{ ...risk, likelihood: "possible", reversible: true }]
-            : [];
+            : []
+          : text.includes("fixture-deny")
+            ? [risk]
+            : text.includes("fixture-ask")
+              ? [{ ...risk, likelihood: "possible", reversible: true }]
+              : [];
         response.writeHead(200, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
@@ -97,7 +109,9 @@ export async function runSeam() {
       const toolResults = body.messages
         .filter((message) => message.role === "tool")
         .map((message) => message.content);
-      const call = Boolean(scenario?.call && toolResults.length === 0);
+      const call = Boolean(
+        scenario?.call && toolResults.length < (scenario.repeat ?? 1),
+      );
       modelRequests.push({ name: scenario?.name, call, toolResults });
       const delta = call
         ? {
@@ -105,11 +119,16 @@ export async function runSeam() {
             tool_calls: [
               {
                 index: 0,
-                id: `call_${scenario.name.replaceAll("-", "_")}`,
+                id: `call_${scenario.name.replaceAll("-", "_")}_${toolResults.length}`,
                 type: "function",
                 function: {
                   name: scenario.call.tool,
-                  arguments: JSON.stringify(scenario.call.arguments),
+                  arguments: JSON.stringify({
+                    ...scenario.call.arguments,
+                    ...(scenario.commands
+                      ? { command: scenario.commands[toolResults.length] }
+                      : {}),
+                  }),
                 },
               },
             ],
@@ -150,6 +169,120 @@ export async function runSeam() {
 
   const evidence = { version, root, reviewerCommit };
   try {
+    if (options.approval) {
+      const ask = (name, approval, extra = {}) => ({
+        name,
+        call: {
+          tool: "shell",
+          arguments: {
+            command: `FIXTURE=fixture-ask sh -c 'echo once >> ${name}.marker'`,
+          },
+        },
+        marker: `${name}.marker`,
+        approval,
+        ...extra,
+      });
+      cases = [
+        ask("ask-once", "once"),
+        ask("ask-deny", "deny", { repeat: 2 }),
+        ask("ask-dismiss", "dismiss"),
+        ask("ask-timeout", "timeout"),
+        ask("ask-no-client", null),
+        ask("ask-disconnected", "disconnect"),
+        ask("ask-cancel", "cancel"),
+        ask("ask-invalid", "invalid"),
+        ask("ask-consumed", "once", { repeat: 2 }),
+        ask("ask-stale-intent", "stale-intent"),
+        ask("ask-stale-goal", "stale-goal"),
+        ask("ask-reservation", "reservation"),
+        {
+          ...ask("ask-script", "script"),
+          call: { tool: "shell", arguments: { command: "bash mutable.sh" } },
+          script: "FIXTURE=fixture-ask touch ask-script.marker\n",
+        },
+        {
+          ...ask("ask-script-deny", "script-deny"),
+          call: {
+            tool: "shell",
+            arguments: { command: "bash denied-script.sh" },
+          },
+          script: "FIXTURE=fixture-ask touch ask-script-deny.marker\n",
+        },
+        ask("ask-native-deny", "once"),
+      ];
+      if (options.human)
+        cases = ["human-once", "human-deny"].map((name) => ({
+          ...ask(name, null),
+          human: true,
+          call: {
+            tool: "shell",
+            arguments: {
+              command: `API_TOKEN=demo-secret FIXTURE=fixture-ask sh -c 'echo once >> ${name}.marker'`,
+            },
+          },
+        }));
+      if (options.layout) cases = cases.slice(0, 1);
+      evidence.approval = await boot({
+        name: "approval",
+        root: `${root}/approval`,
+        baseURL,
+        aar,
+        modelRequests,
+        cases,
+        human: options.human,
+        layout: options.layout,
+        pluginOptions: { approvalTimeoutMs: options.human ? 600000 : 2000 },
+        rules: () => [
+          { action: "*", resource: "*", effect: "allow" },
+          {
+            action: "shell",
+            resource: "*ask-native-deny.marker*",
+            effect: "deny",
+          },
+        ],
+      });
+      if (!options.human) {
+        cases = [
+          ask("deny-note-failure", "deny", { repeat: 2 }),
+          ask("denial-allow", "deny", {
+            repeat: 2,
+            call: {
+              tool: "shell",
+              arguments: { command: "touch denial-allow.marker" },
+            },
+          }),
+          ask("denial-recovery", "denial-recovery", {
+            repeat: 3,
+            call: {
+              tool: "shell",
+              arguments: { command: "touch denial-recovery.marker" },
+            },
+            commands: [
+              "touch denial-recovery.marker",
+              "FIXTURE=fixture-ask touch recovery-b.marker",
+              "touch denial-recovery.marker",
+            ],
+          }),
+        ];
+        evidence.denialFailure = await boot({
+          name: "approval",
+          root: `${root}/denial-failure`,
+          baseURL,
+          aar,
+          binaryPath: await writeDenialFixture(`${root}/denial-failure`, aar),
+          modelRequests,
+          cases,
+          pluginOptions: { approvalTimeoutMs: 2000 },
+        });
+      }
+      evidence.assessorRequests = assessorRequests;
+      await writeFile(
+        `${root}/results.json`,
+        JSON.stringify(evidence, null, 2),
+      );
+      console.log(`Approval evidence: ${root}/results.json`);
+      return evidence;
+    }
     cases = mainCases(`${root}/main`);
     evidence.main = await boot({
       name: "main",
@@ -406,6 +539,10 @@ if [ "$1" = "doctor" ]; then
   printf '%s\\n' '${doctor}'
   exit 0
 fi
+if [ "$1" = "session-event" ]; then
+  printf '%s\\n' '{"status":"invalidated"}'
+  exit 0
+fi
 input=$(cat)
 case "$input" in
   *fixture-nonzero*) echo "fixture exploded" >&2; exit 3 ;;
@@ -427,6 +564,17 @@ async function writeDoctorFixture(root) {
   await writeFile(
     file,
     '#!/bin/sh\nif [ "$1" = "doctor" ]; then echo "fixture doctor failure" >&2; exit 1; fi\nexit 0\n',
+  );
+  await chmod(file, 0o755);
+  return file;
+}
+
+async function writeDenialFixture(root, aar) {
+  await mkdir(root, { recursive: true });
+  const file = `${root}/fixture-aar`;
+  await writeFile(
+    file,
+    `#!/bin/sh\nif [ "$1" = "deny-note" ]; then echo 'deny-note fixture failure' >&2; exit 3; fi\nexec '${aar.replaceAll("'", "'\\''")}' "$@"\n`,
   );
   await chmod(file, 0o755);
   return file;
@@ -588,6 +736,16 @@ async function boot(config) {
           (item.source?.type === "local" &&
             item.source.path.startsWith(gateDir)),
       );
+    let layoutCapture;
+    const rpc = async (method, input, directory = `${root}/project`) =>
+      (
+        await api(
+          "POST",
+          `/api/rpc/command-gate/${method}?location[directory]=${encodeURIComponent(directory)}`,
+          { input },
+        )
+      ).output;
+    const clientID = "integration-adapter";
     const results = [];
     for (const scenario of config.cases) {
       const directory = scenario.directory ?? `${root}/project`;
@@ -608,15 +766,179 @@ async function boot(config) {
           metadata: { goal: scenario.goal },
         });
       }
+      if (scenario.human && results.length === 0) {
+        const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+        const assignments = Object.entries(env)
+          .map(([key, value]) => `${key}=${quote(value)}`)
+          .join(" ");
+        await writeFile(
+          `${root}/launch-tui.sh`,
+          `#!/bin/sh\ntrap ${quote(`touch ${quote(`${root}/human-tui.closed`)}`)} EXIT\nenv -i ${assignments} ${quote(opencode)} --server http://127.0.0.1:${port} --session ${quote(sessionID)} ${quote(directory)}\n`,
+        );
+        console.log(
+          `Human TUI: sh ${root}/launch-tui.sh; inspect details, choose Allow once for human-once, then Deny for human-deny, and exit.`,
+        );
+        if (config.layout)
+          layoutCapture = exec("python3", [
+            `${here}/tui-layout.py`,
+            `${root}/launch-tui.sh`,
+            `${root}/tui-layout.json`,
+          ]);
+        let connected = false;
+        for (let index = 0; index < 6000; index++) {
+          const events = parseGateEvents(await collectGateText(root, logs));
+          connected = events.some(
+            (item) =>
+              item.kind === "approval-client" && item.clientID !== clientID,
+          );
+          if (connected) break;
+          await delay(100);
+        }
+        if (!connected)
+          throw Error("Human TUI did not connect within ten minutes");
+      }
+      if (config.name === "approval" && !config.human) {
+        await rpc(scenario.approval ? "connect" : "disconnect", { clientID });
+      }
+      if (scenario.script)
+        await writeFile(
+          `${directory}/${scenario.approval === "script-deny" ? "denied-script.sh" : "mutable.sh"}`,
+          scenario.script,
+        );
       await api("POST", `/api/session/${sessionID}/prompt`, {
         text: `CASE ${scenario.name}`,
       });
-      await api(
-        "POST",
-        `/api/experimental/session/${sessionID}/wait`,
-        undefined,
-        scenario.name === "fixture-timeout" ? 30000 : 20000,
-      );
+      let pending = null;
+      let reply = null;
+      if (scenario.approval) {
+        for (let index = 0; index < 100; index++) {
+          const listed = await rpc("list", { clientID, sessionID });
+          pending = listed.find((item) => item.sessionID === sessionID);
+          if (pending) break;
+          await delay(50);
+        }
+        if (!pending) throw Error(`No pending approval for ${scenario.name}`);
+        const input = {
+          clientID,
+          pendingID: pending.pendingID,
+          sessionID,
+          messageID: pending.messageID,
+          callID: pending.callID,
+          intentGeneration: pending.intentGeneration,
+          fingerprint: pending.fingerprint,
+          decision: ["deny", "dismiss"].includes(scenario.approval)
+            ? scenario.approval
+            : "once",
+        };
+        const fetched = await rpc("get", {
+          clientID,
+          pendingID: pending.pendingID,
+        });
+        if (JSON.stringify(fetched) !== JSON.stringify(pending))
+          throw Error("list/get reconciliation disagrees");
+        if (
+          scenario.approval === "script" ||
+          scenario.approval === "script-deny"
+        ) {
+          await writeFile(
+            `${directory}/${scenario.approval === "script-deny" ? "denied-script.sh" : "mutable.sh"}`,
+            scenario.approval === "script-deny"
+              ? "FIXTURE=fixture-deny touch ask-script-deny.marker\n"
+              : "FIXTURE=fixture-ask printf changed > ask-script.marker\n",
+          );
+        }
+        if (scenario.approval === "stale-intent")
+          await api("POST", `/api/session/${sessionID}/prompt`, {
+            text: `New intent CASE ${scenario.name}`,
+            resume: false,
+          });
+        if (scenario.approval === "stale-goal")
+          await api("PATCH", `/api/session/${sessionID}`, {
+            metadata: {
+              goal: {
+                condition: "Different Goal",
+                version: 2,
+                status: "active",
+              },
+            },
+          });
+        if (scenario.approval === "reservation")
+          await exec(
+            config.aar,
+            ["session-event", "--session", sessionID, "--event", "clear"],
+            { cwd: directory, env },
+          );
+        if (scenario.approval === "disconnect")
+          await rpc("disconnect", { clientID });
+        else if (scenario.approval === "cancel")
+          await api("POST", `/api/session/${sessionID}/interrupt?resume=false`);
+        else if (scenario.approval === "invalid") {
+          const foreign = await rpc("reply", {
+            ...input,
+            sessionID: activation.data.id,
+          });
+          const wrongCall = await rpc("reply", {
+            ...input,
+            callID: "another-call",
+          });
+          const wrongFingerprint = await rpc("reply", {
+            ...input,
+            fingerprint: "stale",
+          });
+          reply = { foreign, wrongCall, wrongFingerprint };
+        } else if (scenario.approval !== "timeout") {
+          if (scenario.approval === "denial-recovery") input.decision = "deny";
+          reply = await rpc("reply", input);
+          reply.duplicate = await rpc("reply", input);
+          if (scenario.approval === "denial-recovery") {
+            let next;
+            for (let index = 0; index < 100; index++) {
+              next = (await rpc("list", { clientID, sessionID }))[0];
+              if (next) break;
+              await delay(50);
+            }
+            if (!next) throw Error("recovery command did not ask");
+            await exec(
+              config.aar,
+              ["session-event", "--session", sessionID, "--event", "clear"],
+              { cwd: directory, env },
+            );
+            reply.recovery = await rpc("reply", {
+              clientID,
+              pendingID: next.pendingID,
+              sessionID,
+              messageID: next.messageID,
+              callID: next.callID,
+              intentGeneration: next.intentGeneration,
+              fingerprint: next.fingerprint,
+              decision: "once",
+            });
+          }
+        }
+      }
+      if (scenario.human) {
+        let finished = false;
+        for (let index = 0; index < 6050; index++) {
+          const context = await api("GET", `/api/session/${sessionID}/context`);
+          if (JSON.stringify(context).includes("FINISHED")) {
+            finished = true;
+            break;
+          }
+          await delay(100);
+        }
+        if (!finished)
+          throw Error("Human case did not finish within its bounded deadline");
+      } else {
+        await api(
+          "POST",
+          `/api/experimental/session/${sessionID}/wait`,
+          undefined,
+          scenario.name === "fixture-timeout" ? 30000 : 20000,
+        );
+      }
+      const remaining = scenario.approval
+        ? await rpc("list", { clientID, sessionID })
+        : [];
       const context = await api("GET", `/api/session/${sessionID}/context`);
       const calls = config.modelRequests.filter(
         (item) => item.name === scenario.name,
@@ -632,6 +954,10 @@ async function boot(config) {
       results.push({
         name: scenario.name,
         sessionID,
+        pending,
+        reply,
+        remaining,
+        sideEffect: marker ? await readFile(markerPath, "utf8") : null,
         marker,
         markerContent:
           marker && scenario.name === "invocation"
@@ -642,6 +968,21 @@ async function boot(config) {
         toolResult: calls.flatMap((item) => item.toolResults).join("\n"),
         finished: JSON.stringify(context).includes("FINISHED"),
       });
+    }
+    if (layoutCapture) await layoutCapture;
+    if (config.human) {
+      console.log(
+        "Both human responses finished; please exit the temporary TUI.",
+      );
+      let closed = false;
+      for (let index = 0; index < 6000; index++) {
+        closed = await access(`${root}/human-tui.closed`)
+          .then(() => true)
+          .catch(() => false);
+        if (closed) break;
+        await delay(100);
+      }
+      if (!closed) throw Error("Temporary human TUI did not exit");
     }
     let bypass = null;
     if (config.bypass) {
@@ -686,6 +1027,9 @@ async function boot(config) {
       canonicalWorkdir: await realpath(`${root}/project/other`).catch(
         () => null,
       ),
+      layout: config.layout
+        ? JSON.parse(await readFile(`${root}/tui-layout.json`, "utf8"))
+        : null,
       project: `${root}/project`,
       cases: results,
       bypass,

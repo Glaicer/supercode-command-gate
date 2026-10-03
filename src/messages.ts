@@ -16,7 +16,7 @@ export function unavailableReason(detail: string): string {
 }
 
 export function approvalReason(): string {
-  return "this command requires human approval, which is not available in this build yet; the approval flow ships separately";
+  return "this command requires human approval; no working approval client is available";
 }
 
 export function startupDiagnostic(reason: string): string {

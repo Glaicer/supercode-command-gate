@@ -8,12 +8,16 @@
   "main": "./index.ts",
   "exports": {
     ".": "./index.ts",
-    "./plugin": "./src/plugin.ts"
+    "./plugin": "./src/plugin.ts",
+    "./tui": "./tui.js",
+    "./rpc": "./dist/rpc.js"
   },
   "files": [
     "README.md",
     "index.ts",
-    "src"
+    "src",
+    "tui.js",
+    "dist"
   ],
   "publishConfig": {
     "access": "public"
@@ -21,6 +25,8 @@
   "scripts": {
     "test": "node --test 'src/**/*.test.ts'",
     "test:seam": "node --test test/seam.test.mjs",
+    "test:approval": "node --test test/approval.test.mjs",
+    "compile:tui": "tsc --project tsconfig.tui.json",
     "typecheck": "tsc --noEmit",
     "format:check": "prettier --check 'src/**/*.ts' 'test/**/*.mjs' '*.ts' '*.json'"
   },

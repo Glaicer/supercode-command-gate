@@ -245,6 +245,38 @@ export function callDoctor(
   }) as Promise<DoctorReport>;
 }
 
+export async function callAction(
+  binaryPath: string,
+  request: Pick<Request, "cwd" | "workspaceRoot" | "session">,
+  action: "grant" | "deny-note" | "session-event",
+  args: string[],
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  const result = await runReviewer(
+    binaryPath,
+    [action, "--session", request.session.id, ...args],
+    {
+      cwd: request.cwd,
+      env: reviewerEnvironment(request),
+      timeoutMs,
+      signal,
+    },
+  );
+  const status =
+    action === "grant"
+      ? "granted"
+      : action === "deny-note"
+        ? "denied"
+        : "invalidated";
+  if (
+    !result ||
+    typeof result !== "object" ||
+    (result as { status?: unknown }).status !== status
+  )
+    throw new Error(`${action} returned an invalid status`);
+}
+
 export function normalizeDoctorResult(
   report: unknown,
   gateTimeoutMs: number,

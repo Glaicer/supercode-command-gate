@@ -1,3 +1,5 @@
+import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./approval.ts";
+
 export const DEFAULT_TOOLS = ["bash", "shell"];
 export const DEFAULT_TIMEOUT_MS = 5500;
 
@@ -5,6 +7,7 @@ export type GateConfig = {
   binaryPath: string;
   tools: string[];
   timeoutMs: number;
+  approvalTimeoutMs: number;
   configError: string | null;
 };
 
@@ -47,6 +50,11 @@ export function resolveConfig(
     Number.isFinite(timeoutValue) && timeoutValue > 0
       ? timeoutValue
       : DEFAULT_TIMEOUT_MS;
+  const approvalTimeoutMs = Number(
+    options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS,
+  );
+  if (!Number.isFinite(approvalTimeoutMs) || approvalTimeoutMs <= 0)
+    errors.push("approvalTimeoutMs must be a positive number");
 
   const onReviewerFailure = normalizeText(
     options.onReviewerFailure ?? env.AAR_GATE_ON_REVIEWER_FAILURE ?? "deny",
@@ -74,6 +82,7 @@ export function resolveConfig(
     binaryPath: binaryPath === "" ? "aar" : binaryPath,
     tools,
     timeoutMs,
+    approvalTimeoutMs,
     configError: errors.length === 0 ? null : errors.join("; "),
   };
 }

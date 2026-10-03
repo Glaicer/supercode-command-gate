@@ -100,7 +100,7 @@ test("compound programs and scanner-empty commands are reviewed verbatim", () =>
   assert.equal(compound.marker, false);
   assert.equal(compound.finished, true);
   assert.match(compound.toolResult, /requires human approval/i);
-  const compoundReview = reviewOf(compound, "review-deny");
+  const compoundReview = reviewOf(compound, "approval-ask");
   assert.equal(compoundReview.command, COMPOUND_COMMAND);
   assert.match(compoundReview.reason, /uncertainty/i);
   assert.ok(
@@ -159,13 +159,13 @@ test("reviewed cwd and env facts match the actual invocation without forwarding 
   assert.ok(goalReview.intentId.length > 0);
 });
 
-test("Reviewer ask refuses safely until the approval flow ships", () => {
+test("Reviewer ask refuses safely without a working approval client", () => {
   const ask = find(evidence.main, "ask-refusal");
   assert.equal(ask.marker, false);
   assert.match(ask.toolResult, /requires human approval/i);
   assert.match(ask.toolResult, /command was not executed/i);
   assert.equal(ask.finished, true);
-  assert.equal(reviewOf(ask, "review-deny").source, "assessor");
+  assert.equal(reviewOf(ask, "approval-ask").source, "assessor");
 });
 
 test("background and non-Bash invocations refuse explicitly", () => {
