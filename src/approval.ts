@@ -64,6 +64,12 @@ export class ApprovalQueue {
     return fresh;
   }
 
+  available(): boolean {
+    return [...this.#clients.keys()].some((clientID) =>
+      this.connected(clientID),
+    );
+  }
+
   connected(clientID: string): boolean {
     return Date.now() < (this.#clients.get(clientID) ?? 0);
   }

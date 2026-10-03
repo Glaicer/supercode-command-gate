@@ -41,6 +41,25 @@ test("every boot activates the Gate and startup validates the Reviewer contract"
   assert.equal(doctor.reviewerTimeoutMs, 5000);
 });
 
+test("public health distinguishes Reviewer failure and absent approval adapter and delivers server settings", () => {
+  assert.equal(evidence.main.status.healthy, true);
+  assert.equal(evidence.main.status.approvalAvailable, false);
+  assert.equal(evidence.main.status.failureMode, "deny");
+  assert.deepEqual(evidence.main.status.settings, {
+    binaryPath: `${evidence.root}/aar`,
+    tools: ["bash", "shell"],
+    timeoutMs: 5500,
+    approvalTimeoutMs: 600000,
+    commandRewriter: "none",
+    rewriterPath: "rtk",
+  });
+  for (const boot of [evidence.doctorFail, evidence.missingBinary]) {
+    assert.equal(boot.status.healthy, false);
+    assert.ok(boot.status.reason.length > 0);
+    assert.equal(boot.status.failureMode, "deny");
+  }
+});
+
 test("real auto-allow and assessor allow run exactly one native invocation", () => {
   const autoAllow = find(evidence.main, "auto-allow");
   assert.equal(autoAllow.modelCalls, 1);

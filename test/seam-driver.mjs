@@ -7,6 +7,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  copyFile,
   realpath,
   writeFile,
 } from "node:fs/promises";
@@ -15,6 +16,8 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runLifecycleCases } from "./lifecycle-driver.mjs";
+import { createHash } from "node:crypto";
+import { preparePacked } from "./packed-release.mjs";
 import {
   runConcurrencyCases,
   runGrantRaceCases,
@@ -53,10 +56,21 @@ export async function runSeam(options = {}) {
     (await mkdtemp("/tmp/opencode/command-gate-seam-"));
   if (process.env.SEAM_ROOT) await mkdir(root, { recursive: true });
   const aar = `${root}/aar`;
-  await exec("go", ["build", "-o", aar, "./cmd/aar"], { cwd: reviewer });
-  const reviewerCommit = (
-    await exec("git", ["rev-parse", "HEAD"], { cwd: reviewer })
-  ).stdout.trim();
+  if (process.env.AAR_PREBUILT) {
+    await copyFile(process.env.AAR_PREBUILT, aar);
+    await chmod(aar, 0o755);
+  } else {
+    if (process.env.GATE_PACKED === "1")
+      throw Error(
+        "Packed smoke requires AAR_PREBUILT pointing to a separate existing Reviewer binary",
+      );
+    await exec("go", ["build", "-o", aar, "./cmd/aar"], { cwd: reviewer });
+  }
+  const reviewerCommit = process.env.AAR_PREBUILT
+    ? null
+    : (
+        await exec("git", ["rev-parse", "HEAD"], { cwd: reviewer })
+      ).stdout.trim();
 
   const assessorRequests = [];
   const modelRequests = [];
@@ -178,8 +192,53 @@ export async function runSeam(options = {}) {
   await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
   const baseURL = `http://127.0.0.1:${provider.address().port}/v1`;
 
-  const evidence = { version, root, reviewerCommit };
+  let packed = null;
+  const boot = (config) => bootHost({ ...config, packed });
+  const evidence = {
+    version,
+    root,
+    reviewerSourceCommit: reviewerCommit,
+    reviewerArtifact: process.env.AAR_PREBUILT ?? "built from source",
+    reviewerSha256: createHash("sha256")
+      .update(await readFile(aar))
+      .digest("hex"),
+  };
   try {
+    packed = process.env.GATE_PACKED === "1" ? await preparePacked(root) : null;
+    evidence.packed = packed?.evidence ?? null;
+    if (options.diagnostics) {
+      evidence.diagnostics = [];
+      for (const name of [
+        "healthy",
+        "missing",
+        "passthrough",
+        "healthy-passthrough",
+      ]) {
+        evidence.diagnostics.push(
+          await boot({
+            name,
+            root: `${root}/${name}`,
+            baseURL,
+            aar,
+            modelRequests,
+            cases: [],
+            diagnostics: true,
+            ...(["missing", "passthrough"].includes(name)
+              ? { binaryPath: `${root}/missing-aar` }
+              : {}),
+            ...(name.includes("passthrough")
+              ? { pluginOptions: { onReviewerFailure: "passthrough" } }
+              : {}),
+          }),
+        );
+      }
+      await writeFile(
+        `${root}/results.json`,
+        JSON.stringify(evidence, null, 2),
+      );
+      console.log(`Diagnostics evidence: ${root}/results.json`);
+      return evidence;
+    }
     if (options.integrity) {
       cases = [
         "late-tool",
@@ -693,6 +752,7 @@ exec '${aar}' "$@"
   } finally {
     provider.closeAllConnections();
     await new Promise((resolve) => provider.close(resolve));
+    await packed?.close();
   }
 }
 
@@ -931,7 +991,7 @@ async function writeDenialFixture(root, aar) {
   return file;
 }
 
-async function boot(config) {
+async function bootHost(config) {
   const root = config.root;
   for (const dir of [
     "home",
@@ -952,7 +1012,10 @@ async function boot(config) {
     HOME: `${root}/home`,
     XDG_CONFIG_HOME: `${root}/config`,
     XDG_DATA_HOME: `${root}/data`,
-    XDG_CACHE_HOME: `${root}/cache`,
+    XDG_CACHE_HOME: config.packed?.cache ?? `${root}/cache`,
+    ...(config.packed
+      ? { NPM_CONFIG_CACHE: `${config.packed.cache}/npm` }
+      : {}),
     XDG_STATE_HOME: `${root}/state`,
     OPENCODE_CONFIG_DIR: `${root}/config/opencode`,
     OPENCODE_SERVER_PASSWORD: "disposable-seam-only",
@@ -960,6 +1023,10 @@ async function boot(config) {
     AAR_STATE_DIR: `${root}/reviewer-state`,
     AAR_CONFIG: `${root}/aar.toml`,
   };
+  const target = config.packed?.target ?? gateDir;
+  const installation = config.packed
+    ? await config.packed.install(opencode, env, `${root}/project`)
+    : null;
   const binaryPath = config.binaryPath ?? config.aar;
   await writeFile(
     `${root}/aar.toml`,
@@ -967,7 +1034,7 @@ async function boot(config) {
   );
   await writeFile(
     `${root}/config/opencode/cli.json`,
-    JSON.stringify({ plugins: [gateDir] }),
+    JSON.stringify({ plugins: [target] }),
   );
   await writeFile(
     `${root}/config/opencode/opencode.json`,
@@ -975,7 +1042,7 @@ async function boot(config) {
       plugins: [
         ...(config.integrityBefore ? [`${here}/integrity-fixture`] : []),
         {
-          package: gateDir,
+          package: target,
           options: { binaryPath, ...(config.pluginOptions ?? {}) },
         },
         ...(config.lifecycle ? [`${here}/admission-fixture`] : []),
@@ -1093,14 +1160,24 @@ async function boot(config) {
         (item) =>
           item.id === "command-gate" &&
           item.state?.status === "active" &&
-          typeof item.source?.path === "string" &&
-          item.source.path.startsWith(gateDir),
+          item.features?.tui === true &&
+          (config.packed
+            ? item.source?.type === "package" &&
+              item.source.target === target &&
+              item.source.version === config.packed.evidence.version
+            : typeof item.source?.path === "string" &&
+              item.source.path.startsWith(gateDir)),
       ) &&
       plugins.every(
         (item) =>
           item.source?.type === "builtin" ||
+          (item.source?.type === "package" && item.source.target === target) ||
           (item.source?.type === "local" &&
-            item.source.path.startsWith(gateDir)),
+            [
+              gateDir,
+              `${here}/admission-fixture`,
+              `${here}/integrity-fixture`,
+            ].some((directory) => item.source.path.startsWith(directory))),
       );
     let layoutCapture;
     const rpc = async (method, input, directory = `${root}/project`) =>
@@ -1112,12 +1189,28 @@ async function boot(config) {
         )
       ).output;
     const clientID = "integration-adapter";
+    if (config.diagnostics) {
+      const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+      const assignments = Object.entries(env)
+        .map(([key, value]) => `${key}=${quote(value)}`)
+        .join(" ");
+      const launcher = `${root}/launch-diagnostics.sh`;
+      await writeFile(
+        launcher,
+        `#!/bin/sh\nexec env -i ${assignments} ${quote(opencode)} --server http://127.0.0.1:${port} --session ${quote(activation.data.id)} ${quote(`${root}/project`)}\n`,
+      );
+      await exec(
+        "python3",
+        [`${here}/tui-diagnostics.py`, launcher, `${root}/diagnostics.capture`],
+        { timeout: 25000 },
+      );
+    }
     const launchLifecycleTui = async (sessionID) => {
       await writeFile(
         `${root}/config/opencode/cli.json`,
         JSON.stringify({
           tabs: { mode: "on" },
-          plugins: [gateDir, `${here}/clear-fixture`],
+          plugins: [target, `${here}/clear-fixture`],
         }),
       );
       const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
@@ -1524,6 +1617,11 @@ async function boot(config) {
       concurrency,
       grantRaces,
       inventoryOK,
+      installation,
+      inventory: plugins,
+      diagnostics: config.diagnostics
+        ? await readFile(`${root}/diagnostics.capture`, "utf8")
+        : null,
       status: await rpc("status", {}),
       canonicalWorkdir: await realpath(`${root}/project/other`).catch(
         () => null,

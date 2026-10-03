@@ -180,6 +180,10 @@ export default Plugin.define({
         console.error(
           `[command-gate] startup-unavailable ${JSON.stringify({ reason: startup.reason, message: !config.configError && config.onReviewerFailure === "passthrough" ? `UNREVIEWED execution: explicit passthrough; ${startup.reason}. Fix aar doctor and reload.` : startupDiagnostic(startup.reason) })}`,
         );
+      if (!config.configError && config.onReviewerFailure === "passthrough")
+        console.error(
+          '[command-gate] startup-unreviewed {"message":"UNREVIEWED mode: explicit passthrough permits Reviewer operational failures to execute without review"}',
+        );
 
       let changed = false;
       const approvals = new ApprovalQueue(() => {
@@ -330,6 +334,15 @@ export default Plugin.define({
               failureMode: config.configError
                 ? "deny"
                 : config.onReviewerFailure,
+              approvalAvailable: approvals.available(),
+              settings: {
+                binaryPath: config.binaryPath,
+                tools: config.tools,
+                timeoutMs: config.timeoutMs,
+                approvalTimeoutMs: config.approvalTimeoutMs,
+                commandRewriter: config.commandRewriter,
+                rewriterPath: config.rewriterPath,
+              },
             }),
           connect: (input) =>
             Effect.gen(function* () {

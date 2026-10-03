@@ -165,6 +165,29 @@ export default Plugin.define({
       append: "app",
       render: () =>
         untrack(() => {
+          ctx.keymap.layer(() => ({
+            mode: "global",
+            commands: [
+              {
+                id: "command-gate.health",
+                title: "Command Gate: health",
+                group: "Command Gate",
+                palette: true,
+                slash: { name: "gate-health" },
+                run: async () => {
+                  try {
+                    const status = await rpc.status({});
+                    await readText(
+                      "Command Gate — health",
+                      JSON.stringify(status, null, 2),
+                    );
+                  } catch (error) {
+                    unavailable(error);
+                  }
+                },
+              },
+            ],
+          }));
           const nativeClear = ctx.keymap
             .commands()
             .find((command) => command.slash?.name === "clear");

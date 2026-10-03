@@ -1,6 +1,6 @@
 # Command Gate V2
 
-Native Bash review for OpenCode **2.0.22**, using the existing `aar` Command Reviewer. This implementation supports automatic allow/deny, optional pre-review RTK rewriting and same-call **Deny / Allow once / Trust exact for session**, with failure/cancellation/concurrency and invocation-integrity regression coverage. Packed-release verification remains a separate ticket.
+Native Bash review for OpenCode **2.0.22**, using the separate `aar` Command Reviewer. The **1.0.0** breaking release line is V2-only; the historical Gate **0.1.0** remains V1-only. No dual-API factory or runtime emulation is shipped. Release acceptance remains incomplete until the genuine human TUI smoke passes.
 
 ## Approval
 
@@ -10,22 +10,23 @@ Only an explicit, matching human reply can create `aar grant --scope once` or `a
 
 Deny records `aar deny-note` and retains the exact denial in memory until intent/Goal changes. This remains authoritative if the CLI fails, a later assessor allows, or another command's failed approval resets Reviewer state. No working adapter, disconnect, expiry, cancellation, stale/duplicate reply or failed grant means no execution.
 
-## Local setup and options
+## Installation and migration from V1
+
+Install the existing separate Reviewer binary for Linux amd64/arm64 or macOS amd64/arm64, verify its release checksum, and make `aar doctor` pass. The Gate neither embeds, builds nor downloads `aar`. Windows and non-Bash execution are unsupported. Reviewer policy/provider/profile/grant settings remain in the Reviewer configuration; plugin options below configure only the Gate.
+
+After the V2 package is published, use the native flow (this ticket does **not** publish it or install into your real setup):
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm compile:tui
+opencode plugin add @supercode/command-gate
 ```
 
-The root `tui.js` entry loads compiled JS from `dist/`; the UI uses the host's built-in dialogs and does not ship another Solid/OpenTUI renderer. Regenerate it after source changes. No raw npm TSX is loaded.
-
-Configure the plugin directory in the V2 server `plugins` array, with options on the server entry:
+Replace the V1 plugin registration; do not run both Gates. Manually copy values from the legacy JSONC `gate` section into the V2 package entry in global `~/.config/opencode/opencode.jsonc`; the V2 Gate never reads that section itself:
 
 ```jsonc
 {
   "plugins": [
     {
-      "package": "/absolute/path/to/command-gate-v2",
+      "package": "@supercode/command-gate",
       "options": {
         "binaryPath": "/absolute/path/to/aar",
         "timeoutMs": 5500,
@@ -36,7 +37,36 @@ Configure the plugin directory in the V2 server `plugins` array, with options on
 }
 ```
 
-The TUI half is discoverable through the server inventory; its operational settings come from server RPC, not duplicated client options. Isolated tests additionally register the same directory in their temporary `cli.json`. This slice is not a verified packed release; do not publish or change a personal service/config as part of testing it.
+Native `plugin add` also registers the bare package in global `cli.json`. Server inventory discovers its TUI half; operational settings come from RPC, not duplicated client options. Both registrations resolve to one TUI instance. Config changes require a **fresh location/service boot**; already-active locations can retain the old inventory/options. Do not restart the service hosting an active agent. A directory target must be an installed package directory with dependencies; standalone JS paths are not supported. Root `index.js`, `tui.js` and `rpc.js` forward to compiled JavaScript. The UI uses host dialogs and host Solid; there is no raw JSX/TSX or bundled renderer.
+
+| Server option | Default | Explicit environment override |
+| --- | --- | --- |
+| `binaryPath` | `aar` | `AAR_BINARY_PATH` |
+| `tools` | `["bash", "shell"]` | `AAR_GATE_TOOLS` (comma-separated) |
+| `timeoutMs` | `5500` | `AAR_GATE_TIMEOUT_MS` |
+| `commandRewriter` | `none` | `AAR_GATE_COMMAND_REWRITER` |
+| `rewriterPath` | `rtk` | `AAR_GATE_REWRITER_PATH` |
+| `onReviewerFailure` | `deny` | `AAR_GATE_ON_REVIEWER_FAILURE` |
+
+Explicit package options take precedence over environment overrides. `approvalTimeoutMs` is a server-only option, default `600000`. Invalid settings deny, including invalid settings combined with passthrough.
+
+Use **Command Gate: health** in the palette, or `/gate-health`, for server doctor health/reason, failure mode, effective settings and approval-adapter availability. An active inventory item is only proof of loading, not successful review. Missing/incompatible Reviewer, explicit **UNREVIEWED** passthrough and unavailable approval adapter have separate diagnostics.
+
+## Native permission backstop
+
+Keep native shell allow with the minimal deny backstop. Native **Always** saves project/prefix permissions; it is not **Trust exact for session** and cannot replace a fresh Reviewer check. Broad native ask rules can introduce a second prompt after review.
+
+```jsonc
+{
+  "permissions": [
+    { "action": "shell", "resource": "*", "effect": "allow" },
+    { "action": "shell", "resource": "mkfs*", "effect": "deny" },
+    { "action": "shell", "resource": "dd *", "effect": "deny" },
+    { "action": "shell", "resource": "shutdown *", "effect": "deny" },
+    { "action": "shell", "resource": "reboot*", "effect": "deny" },
+  ],
+}
+```
 
 | Deadline            | Default    | Meaning                                                                                                                                |
 | ------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------- |
@@ -78,16 +108,22 @@ Reviewer remains Bash-only; sh/zsh/fish/PowerShell and explicit native backgroun
 ## Verification
 
 ```sh
+pnpm install --frozen-lockfile
+pnpm compile
 pnpm typecheck
 pnpm format:check
-pnpm test
-pnpm test:seam
-pnpm test:approval
-node --test test/lifecycle.test.mjs test/tui-actions.test.mjs
-node --test test/tui-layout.test.mjs
-node --test test/failures.test.mjs test/cancellation.test.mjs test/concurrency.test.mjs
-node --test test/rtk.test.mjs test/integrity.test.mjs
-GATE_HUMAN=1 node --test test/human.test.mjs
+pnpm test:package
+pnpm test:all
+AAR_PREBUILT=/absolute/path/to/existing/aar pnpm test:packed
+AAR_PREBUILT=/absolute/path/to/existing/aar pnpm test:human:packed
 ```
 
-Integration tests use an isolated real target host, real `aar`, loopback fake model/assessor, temporary HOME/XDG/config and marker effects. Artifacts are printed below `/tmp/opencode`; personal configuration and service are untouched. Python 3 drives the 64×24 PTY layout regression without approving execution. The separate automated TUI-actions test presses once/session/deny actions and checks real native effects; it is **not human-approval evidence**. The opt-in human test prints a launcher: inspect summary/details, manually Allow once twice for `human-once`, Trust exact for session for `human-session`, Deny for `human-deny`, then exit the temporary TUI. Automated replies and PTY input are not human-approval evidence.
+`compile` emits server/TUI/RPC and excludes test sources; `prepack` regenerates compiled output. Build/runtime dependency pins were rechecked against registry.npmjs.org for host 2.0.22; its plugin package pins client 2.0.22 and Effect 4.0.0-rc.112. Solid is build-time/types-only: the host supplies its own runtime instance, and this dialog-only UI needs no JSX transform.
+
+Packed tests use **native plugin add through a loopback registry** in isolated HOME/XDG/config, then activate the location and require package-source inventory, TUI discovery and working RPC. The registry proxies only dependency requests to npm. Installed JS is compared byte-for-byte against the extracted tarball; artifact integrity, exact host version, Reviewer SHA256, inventory, settings, audit and native effects are saved below `/tmp/opencode`. `AAR_PREBUILT` is required for packed checks, so the separate existing Reviewer is never built by that path. Workspace tests may build the Reviewer from `AAR_SOURCE`. Python 3 drives real target TUI actions/layout; these are automated regression evidence, **not human approval**.
+
+Full commands serialize test files to bound installation/host resources. Boots within one packed run reuse its isolated dependency cache; the first boot proves cold native installation, later boots prove activation/reuse. The harness removes only that run-owned cache after servers stop, retaining tarball, extracted artifact, logs and installation evidence. Regenerate a live launcher by rerunning the human command rather than using a completed run's stale launcher.
+
+TUI keymap registration must occur under the rendered app slot, not directly in plugin setup: setup has no host `Keymap.Provider`. The real-TUI diagnostics test covers this boundary.
+
+The opt-in human command prints an isolated TUI launcher: inspect summary/details, manually Allow once twice for `human-once`, Trust exact for session for `human-session`, Deny for `human-deny`, then exit the temporary TUI. It must be run while the test server is alive; the harness stops its processes on completion/failure. Personal config/service/credentials are not connected or changed. Genuine human approval, macOS/arm64 execution and release-download checksum verification are not implied by Linux automated smoke. No publication, push, real installation or service restart is performed.

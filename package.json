@@ -5,18 +5,19 @@
   "private": false,
   "type": "module",
   "description": "OpenCode V2 Command Gate for the aar Command Reviewer",
-  "main": "./index.ts",
+  "main": "./index.js",
   "exports": {
-    ".": "./index.ts",
-    "./plugin": "./src/plugin.ts",
+    ".": "./index.js",
+    "./plugin": "./dist/plugin.js",
+    "./server": "./index.js",
     "./tui": "./tui.js",
-    "./rpc": "./dist/rpc.js"
+    "./rpc": "./rpc.js"
   },
   "files": [
     "README.md",
-    "index.ts",
-    "src",
+    "index.js",
     "tui.js",
+    "rpc.js",
     "dist"
   ],
   "publishConfig": {
@@ -26,7 +27,13 @@
     "test": "node --test 'src/**/*.test.ts'",
     "test:seam": "node --test test/seam.test.mjs",
     "test:approval": "node --test test/approval.test.mjs",
-    "compile:tui": "tsc --project tsconfig.tui.json",
+    "compile": "tsc --project tsconfig.release.json",
+    "compile:tui": "tsc --project tsconfig.release.json",
+    "prepack": "pnpm compile",
+    "test:package": "node --test test/package.test.mjs",
+    "test:packed": "GATE_PACKED=1 node --test --test-concurrency=1 'test/*.test.mjs'",
+    "test:all": "node --test --test-concurrency=1 'src/**/*.test.ts' 'test/*.test.mjs'",
+    "test:human:packed": "GATE_PACKED=1 GATE_HUMAN=1 node --test test/human.test.mjs",
     "typecheck": "tsc --noEmit",
     "format:check": "prettier --check 'src/**/*.ts' 'test/**/*.mjs' '*.ts' '*.json'"
   },
