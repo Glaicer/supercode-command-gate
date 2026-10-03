@@ -15,6 +15,10 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runLifecycleCases } from "./lifecycle-driver.mjs";
+import {
+  runConcurrencyCases,
+  runGrantRaceCases,
+} from "./concurrency-driver.mjs";
 
 const exec = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -121,10 +125,11 @@ export async function runSeam(options = {}) {
       const delta = call
         ? {
             role: "assistant",
-            tool_calls: [
-              {
-                index: 0,
-                id: `call_${scenario.name.replaceAll("-", "_")}_${modelRequests.length}`,
+            tool_calls: Array.from(
+              { length: scenario.parallel ?? 1 },
+              (_, index) => ({
+                index,
+                id: `call_${scenario.name.replaceAll("-", "_")}_${modelRequests.length}_${index}`,
                 type: "function",
                 function: {
                   name: scenario.call.tool,
@@ -135,8 +140,8 @@ export async function runSeam(options = {}) {
                       : {}),
                   }),
                 },
-              },
-            ],
+              }),
+            ),
           }
         : { role: "assistant", content: "FINISHED" };
       const chunk = (value) => ({
@@ -174,6 +179,211 @@ export async function runSeam(options = {}) {
 
   const evidence = { version, root, reviewerCommit };
   try {
+    if (options.grantRaces) {
+      cases = [
+        "race-goal",
+        "race-intent",
+        "race-cancel",
+        "race-unload",
+        "pre-goal",
+        "pre-intent",
+        "pre-cancel",
+        "pre-unload",
+      ].map((name) => ({
+        name,
+        call: { tool: "shell", arguments: { command: `bash ${name}.sh` } },
+      }));
+      const raceRoot = `${root}/grant-races`;
+      await mkdir(raceRoot, { recursive: true });
+      const binaryPath = `${raceRoot}/fixture-aar`;
+      await writeFile(
+        binaryPath,
+        `#!/bin/sh
+if [ "$1" = "grant" ]; then
+  if [ -f '${raceRoot}/'$3.before ]; then
+    echo $$ > '${raceRoot}/'$3.ready
+    while [ ! -f '${raceRoot}/'$3.release ]; do sleep 0.02; done
+    result=$('${aar}' "$@") || exit $?
+  else
+    result=$('${aar}' "$@") || exit $?
+    echo $$ > '${raceRoot}/'$3.ready
+    while [ ! -f '${raceRoot}/'$3.release ]; do sleep 0.02; done
+  fi
+  printf '%s\\n' "$result"
+  exit 0
+fi
+exec '${aar}' "$@"
+`,
+      );
+      await chmod(binaryPath, 0o755);
+      evidence.grantRaces = await boot({
+        name: "grant-races",
+        root: raceRoot,
+        baseURL,
+        aar,
+        binaryPath,
+        modelRequests,
+        cases: [],
+        grantRaces: cases,
+      });
+      await writeFile(
+        `${root}/results.json`,
+        JSON.stringify(evidence, null, 2),
+      );
+      console.log(`Grant race evidence: ${root}/results.json`);
+      return evidence;
+    }
+    if (options.concurrency) {
+      cases = [
+        "concurrent-identical",
+        "concurrent-main",
+        "concurrent-child",
+        "concurrent-location",
+      ].map((name) => ({
+        name,
+        parallel: name === "concurrent-identical" ? 2 : 1,
+        call: {
+          tool: "shell",
+          arguments: {
+            command: `FIXTURE=fixture-ask printf 'run\\n' >> ${name}.marker`,
+          },
+        },
+      }));
+      evidence.concurrency = await boot({
+        name: "concurrency",
+        root: `${root}/concurrency`,
+        baseURL,
+        aar,
+        modelRequests,
+        cases: [],
+        concurrency: cases,
+        pluginOptions: { approvalTimeoutMs: 10000 },
+      });
+      await writeFile(
+        `${root}/results.json`,
+        JSON.stringify(evidence, null, 2),
+      );
+      console.log(`Concurrency evidence: ${root}/results.json`);
+      return evidence;
+    }
+    if (options.nativeUnload) {
+      cases = [
+        { ...single("native-unload"), unloadPermission: true },
+        {
+          ...single("native-running"),
+          unloadRunning: true,
+          call: {
+            tool: "shell",
+            arguments: {
+              command: "printf started > native-running.marker; sleep 10",
+            },
+          },
+        },
+      ];
+      evidence.nativeUnload = await boot({
+        name: "native-unload",
+        root: `${root}/native-unload`,
+        baseURL,
+        aar,
+        modelRequests,
+        cases,
+        rules: () => [
+          { action: "*", resource: "*", effect: "allow" },
+          {
+            action: "shell",
+            resource: "*native-unload.marker*",
+            effect: "ask",
+          },
+        ],
+      });
+      await writeFile(
+        `${root}/results.json`,
+        JSON.stringify(evidence, null, 2),
+      );
+      console.log(`Native unload evidence: ${root}/results.json`);
+      return evidence;
+    }
+    if (options.cancellation) {
+      cases = ["fixture-timeout", "fixture-cancel", "fixture-unload"].map(
+        (name) => ({
+          ...single(name),
+          cancellation: name !== "fixture-timeout",
+          ownedProcess: true,
+        }),
+      );
+      evidence.cancellation = await boot({
+        name: "cancellation",
+        root: `${root}/cancellation`,
+        baseURL,
+        binaryPath: await writeCheckFixture(`${root}/cancellation`),
+        modelRequests,
+        cases,
+        pluginOptions: { timeoutMs: 1500 },
+      });
+      await writeFile(
+        `${root}/results.json`,
+        JSON.stringify(evidence, null, 2),
+      );
+      console.log(`Cancellation evidence: ${root}/results.json`);
+      return evidence;
+    }
+    if (options.failures) {
+      for (const [name, pluginOptions] of [
+        ["default", {}],
+        ["passthrough", { onReviewerFailure: "passthrough" }],
+        ["invalid", { onReviewerFailure: "typo" }],
+      ]) {
+        cases = checkFailureCases();
+        evidence[name] = await boot({
+          name,
+          root: `${root}/${name}`,
+          baseURL,
+          binaryPath: await writeCheckFixture(`${root}/${name}`),
+          modelRequests,
+          cases,
+          pluginOptions: { timeoutMs: 1500, ...pluginOptions },
+        });
+      }
+      evidence.startupFailures = [];
+      for (const mode of ["deny", "passthrough"]) {
+        for (const failure of ["missing", "unhealthy", "contract", "config"]) {
+          const name = `${mode}-${failure}`;
+          const bootRoot = `${root}/${name}`;
+          let binaryPath = `${bootRoot}/missing-aar`;
+          if (failure === "unhealthy")
+            binaryPath = await writeDoctorFixture(bootRoot);
+          if (failure === "contract") {
+            binaryPath = await writeCheckFixture(bootRoot);
+            const source = await readFile(binaryPath, "utf8");
+            await writeFile(
+              binaryPath,
+              source.replace("aar-contract-v1", "unsupported-contract"),
+            );
+          }
+          cases = [single(name)];
+          evidence.startupFailures.push(
+            await boot({
+              name,
+              root: bootRoot,
+              baseURL,
+              binaryPath,
+              modelRequests,
+              cases,
+              pluginOptions: {
+                onReviewerFailure: mode,
+                ...(failure === "config" ? { timeoutMs: -1 } : {}),
+              },
+            }),
+          );
+        }
+      }
+      await writeFile(
+        `${root}/results.json`,
+        JSON.stringify(evidence, null, 2),
+      );
+      console.log(`Failure evidence: ${root}/results.json`);
+      return evidence;
+    }
     if (options.lifecycle) {
       const scenario = {
         name: "lifecycle-native",
@@ -281,7 +491,10 @@ export async function runSeam(options = {}) {
         human: options.human,
         layout: options.layout,
         tuiActions: options.tuiActions,
-        pluginOptions: { approvalTimeoutMs: options.human ? 600000 : 2000 },
+        pluginOptions: {
+          approvalTimeoutMs: options.human ? 600000 : 2000,
+          ...(options.passthrough ? { onReviewerFailure: "passthrough" } : {}),
+        },
         rules: () => [
           { action: "*", resource: "*", effect: "allow" },
           {
@@ -563,6 +776,9 @@ function checkFailureCases() {
     "fixture-malformed",
     "fixture-multi",
     "fixture-invalid",
+    "fixture-schema",
+    "fixture-fingerprint",
+    "fixture-source",
     "fixture-timeout",
   ].map((token) => ({
     name: token,
@@ -599,7 +815,16 @@ case "$input" in
   *fixture-malformed*) printf 'this is not json\\n' ;;
   *fixture-multi*) printf '{"decision":"deny"}\\n{"decision":"allow"}\\n' ;;
   *fixture-invalid*) printf '%s\\n' '${invalid}' ;;
-  *fixture-timeout*) sleep 5 ;;
+  *fixture-schema*) printf '%s\\n' '${invalid.replace("aar-decision-v1", "wrong-schema")}' ;;
+  *fixture-fingerprint*) printf '%s\\n' '${invalid.replace('"maybe"', '"allow"')}' ;;
+  *fixture-source*) printf '%s\\n' '${invalid.replace('"maybe"', '"allow"').replace('"assessor"', '"unavailable"')}' ;;
+  *fixture-timeout*|*fixture-cancel*|*fixture-unload*)
+    case "$input" in *fixture-cancel*) token=fixture-cancel ;; *fixture-unload*) token=fixture-unload ;; *) token=fixture-timeout ;; esac
+    trap '' TERM
+    echo $$ > '${root}/'$token.pid
+    sleep 5
+    touch '${root}/'$token.late
+    ;;
 esac
 exit 0
 `,
@@ -846,6 +1071,12 @@ async function boot(config) {
           assessorRequests: config.assessorRequests,
         })
       : null;
+    const concurrency = config.concurrency
+      ? await runConcurrencyCases({ api, rpc, root, cases: config.concurrency })
+      : null;
+    const grantRaces = config.grantRaces
+      ? await runGrantRaceCases({ api, rpc, root, cases: config.grantRaces })
+      : null;
     const results = [];
     for (const scenario of config.cases) {
       const directory = scenario.directory ?? `${root}/project`;
@@ -916,6 +1147,51 @@ async function boot(config) {
       await api("POST", `/api/session/${sessionID}/prompt`, {
         text: `CASE ${scenario.name}`,
       });
+      if (scenario.unloadPermission) {
+        let permission;
+        for (let index = 0; index < 150; index++) {
+          permission = (
+            await api("GET", `/api/session/${sessionID}/permission`)
+          ).data[0];
+          if (permission) break;
+          await delay(20);
+        }
+        if (!permission)
+          throw Error("Native permission did not follow Reviewer allow");
+        await api("POST", "/api/location/reload");
+        await api(
+          "POST",
+          `/api/session/${sessionID}/permission/${permission.id}/reply`,
+          { decision: "once" },
+        ).catch(() => null);
+      }
+      if (scenario.unloadRunning) {
+        let started = false;
+        for (let index = 0; index < 150; index++) {
+          started = await access(`${directory}/${scenario.marker}`)
+            .then(() => true)
+            .catch(() => false);
+          if (started) break;
+          await delay(20);
+        }
+        if (!started) throw Error("Native shell did not start before unload");
+        await api("POST", "/api/location/reload");
+      }
+      if (scenario.cancellation) {
+        let pid;
+        for (let index = 0; index < 100; index++) {
+          pid = await readFile(`${root}/${scenario.name}.pid`, "utf8").catch(
+            () => null,
+          );
+          if (pid) break;
+          await delay(10);
+        }
+        if (!pid) throw Error("Reviewer did not start before cancellation");
+        if (scenario.name === "fixture-unload")
+          await api("POST", "/api/location/reload");
+        else
+          await api("POST", `/api/session/${sessionID}/interrupt?resume=false`);
+      }
       let pending = null;
       let reply = null;
       if (scenario.approval) {
@@ -1075,8 +1351,24 @@ async function boot(config) {
             .then(() => true)
             .catch(() => false)
         : null;
+      let ownedRunning = null;
+      let lateEffect = null;
+      if (scenario.ownedProcess) {
+        const pid = (
+          await readFile(`${root}/${scenario.name}.pid`, "utf8")
+        ).trim();
+        ownedRunning = await readFile(`/proc/${pid}/stat`, "utf8")
+          .then((stat) => !/\) Z /.test(stat))
+          .catch(() => false);
+        await delay(5200);
+        lateEffect = await access(`${root}/${scenario.name}.late`)
+          .then(() => true)
+          .catch(() => false);
+      }
       results.push({
         name: scenario.name,
+        ownedRunning,
+        lateEffect,
         sessionID,
         pending,
         reply,
@@ -1091,6 +1383,9 @@ async function boot(config) {
         modelCalls: calls.filter((item) => item.call).length,
         toolResult: calls.flatMap((item) => item.toolResults).join("\n"),
         finished: JSON.stringify(context).includes("FINISHED"),
+        ...(scenario.ownedProcess || scenario.unloadPermission
+          ? { context }
+          : {}),
       });
     }
     if (layoutCapture) await layoutCapture;
@@ -1148,7 +1443,10 @@ async function boot(config) {
     return {
       name: config.name,
       lifecycle,
+      concurrency,
+      grantRaces,
       inventoryOK,
+      status: await rpc("status", {}),
       canonicalWorkdir: await realpath(`${root}/project/other`).catch(
         () => null,
       ),

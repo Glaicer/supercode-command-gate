@@ -157,33 +157,55 @@ function runReviewer(
   },
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
+    if (options.signal?.aborted) {
+      reject(new Error("reviewer cancelled"));
+      return;
+    }
     const child = spawn(binaryPath, args, {
       cwd: options.cwd,
       env: options.env,
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
-      signal: options.signal,
+      detached: process.platform !== "win32",
     });
     let stdout = "";
     let stderr = "";
     let stdoutBytes = 0;
     let settled = false;
+    let failure: Error | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (error: Error | null, value?: unknown) => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
       if (error) reject(error);
       else resolve(value);
     };
-    child.once("error", (error) => finish(error));
+    const stop = (error: Error) => {
+      failure ??= error;
+      if (child.pid && process.platform !== "win32") {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH")
+            child.kill("SIGKILL");
+        }
+      } else child.kill("SIGKILL");
+    };
+    const abort = () => stop(new Error("reviewer cancelled"));
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
+    child.once("error", (error) => {
+      failure ??= error;
+    });
+    child.stdin.on("error", (error) => stop(error));
     child.stdout.on("data", (chunk) => {
       if (settled) return;
       const text = String(chunk);
       stdoutBytes += Buffer.byteLength(text);
       if (stdoutBytes > MAX_REVIEWER_STDOUT_BYTES) {
-        child.kill("SIGKILL");
-        finish(new Error("reviewer stdout exceeded the safety limit"));
+        stop(new Error("reviewer stdout exceeded the safety limit"));
         return;
       }
       stdout += text;
@@ -192,6 +214,10 @@ function runReviewer(
       if (Buffer.byteLength(stderr) < 4096) stderr += String(chunk);
     });
     child.once("close", (code, signal) => {
+      if (failure) {
+        finish(failure);
+        return;
+      }
       if (code !== 0) {
         const detail = stderr.trim().split(/\r?\n/)[0] ?? "";
         finish(
@@ -208,8 +234,7 @@ function runReviewer(
       }
     });
     timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish(new Error("reviewer timeout"));
+      stop(new Error("reviewer timeout"));
     }, options.timeoutMs);
     child.stdin.end(options.stdin);
   });

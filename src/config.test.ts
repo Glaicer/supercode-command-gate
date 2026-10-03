@@ -54,11 +54,11 @@ test("empty binaryPath is a configuration error", () => {
   );
 });
 
-test("unimplemented failure and rewrite modes are rejected explicitly", () => {
-  assert.match(
-    String(resolveConfig({ onReviewerFailure: "passthrough" }, {}).configError),
-    /not available in this build/,
-  );
+test("explicit failure modes are accepted; unknown modes and unimplemented rewrites refuse", () => {
+  assert.equal(resolveConfig({}, {}).onReviewerFailure, "deny");
+  const passthrough = resolveConfig({ onReviewerFailure: "passthrough" }, {});
+  assert.equal(passthrough.configError, null);
+  assert.equal(passthrough.onReviewerFailure, "passthrough");
   assert.match(
     String(resolveConfig({ onReviewerFailure: "yes" }, {}).configError),
     /must be deny/,

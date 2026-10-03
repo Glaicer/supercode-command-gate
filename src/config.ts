@@ -8,6 +8,7 @@ export type GateConfig = {
   tools: string[];
   timeoutMs: number;
   approvalTimeoutMs: number;
+  onReviewerFailure: "deny" | "passthrough";
   configError: string | null;
 };
 
@@ -59,13 +60,8 @@ export function resolveConfig(
   const onReviewerFailure = normalizeText(
     options.onReviewerFailure ?? env.AAR_GATE_ON_REVIEWER_FAILURE ?? "deny",
   );
-  if (onReviewerFailure !== "deny") {
-    errors.push(
-      onReviewerFailure === "passthrough"
-        ? "onReviewerFailure passthrough is not available in this build yet; reviewer failures deny"
-        : "onReviewerFailure must be deny",
-    );
-  }
+  if (!["deny", "passthrough"].includes(onReviewerFailure))
+    errors.push("onReviewerFailure must be deny or passthrough");
 
   const commandRewriter = normalizeText(
     options.commandRewriter ?? env.AAR_GATE_COMMAND_REWRITER ?? "none",
@@ -83,6 +79,8 @@ export function resolveConfig(
     tools,
     timeoutMs,
     approvalTimeoutMs,
+    onReviewerFailure:
+      onReviewerFailure === "passthrough" ? "passthrough" : "deny",
     configError: errors.length === 0 ? null : errors.join("; "),
   };
 }

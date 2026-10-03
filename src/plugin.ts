@@ -1,6 +1,6 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { Context, Effect, Semaphore, Stream } from "effect";
+import { Context, Deferred, Effect, Semaphore, Stream } from "effect";
 import { Plugin } from "@opencode/plugin/effect";
 import { Error as ToolError } from "@opencode/plugin/promise/tool";
 import type { ShellCreateBefore } from "@opencode/plugin/effect/shell";
@@ -39,6 +39,7 @@ const BoundCallRef = Context.Reference<CallIdentity | null>(
 
 type ReviewOutcome =
   | { kind: "allow"; request: Request; decision: Decision }
+  | { kind: "unreviewed"; request: Request }
   | { kind: "deny"; message: string };
 
 const deny = (reason: string): ReviewOutcome => ({
@@ -70,10 +71,23 @@ const attemptPromise = <A>(
   try_: (signal: AbortSignal) => PromiseLike<A>,
 ): Effect.Effect<Attempt<A>> =>
   attempt(
-    Effect.tryPromise({
-      try: try_,
-      catch: (error): string => errorMessage(error),
-    }),
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const controller = new AbortController();
+        const promise = Promise.resolve(try_(controller.signal));
+        return { controller, promise };
+      }),
+      ({ promise }) =>
+        Effect.tryPromise({
+          try: () => promise,
+          catch: (error): string => errorMessage(error),
+        }),
+      ({ controller, promise }) =>
+        Effect.promise(async () => {
+          controller.abort();
+          await promise.catch(() => {});
+        }),
+    ),
   );
 
 const startupFailure = (reason: string): StartupStatus => ({
@@ -87,6 +101,8 @@ export default Plugin.define({
     Effect.gen(function* () {
       const config = resolveConfig(ctx.options);
       const state = new GateState();
+      let active = true;
+      const shutdown = yield* Deferred.make<void>();
       const log = (kind: string, detail: Record<string, unknown>) =>
         console.log(`[command-gate] ${kind} ${JSON.stringify(detail)}`);
 
@@ -113,7 +129,7 @@ export default Plugin.define({
         log("doctor-ok", { reviewerTimeoutMs: startup.reviewerTimeoutMs });
       else
         console.error(
-          `[command-gate] startup-unavailable ${JSON.stringify({ reason: startup.reason, message: startupDiagnostic(startup.reason) })}`,
+          `[command-gate] startup-unavailable ${JSON.stringify({ reason: startup.reason, message: !config.configError && config.onReviewerFailure === "passthrough" ? `UNREVIEWED execution: explicit passthrough; ${startup.reason}. Fix aar doctor and reload.` : startupDiagnostic(startup.reason) })}`,
         );
 
       let changed = false;
@@ -258,6 +274,14 @@ export default Plugin.define({
         });
       const registration = yield* ctx.rpc
         .register(Approvals, {
+          status: () =>
+            Effect.succeed({
+              healthy: startup.ok,
+              reason: startup.ok ? null : startup.reason,
+              failureMode: config.configError
+                ? "deny"
+                : config.onReviewerFailure,
+            }),
           connect: (input) =>
             Effect.gen(function* () {
               const clientID = (input as { clientID: string }).clientID;
@@ -445,10 +469,22 @@ export default Plugin.define({
             intentId: request.session.intentId,
             goal: request.intent.goal,
           };
+          const operationalFailure = (reason: string): ReviewOutcome => {
+            if (
+              active &&
+              !config.configError &&
+              config.onReviewerFailure === "passthrough"
+            ) {
+              console.error(
+                `[command-gate] review-unreviewed ${JSON.stringify({ ...evidence, reason, message: "UNREVIEWED execution: explicit onReviewerFailure passthrough" })}`,
+              );
+              return { kind: "unreviewed", request };
+            }
+            log("review-deny", { ...evidence, reason });
+            return deny(unavailableReason(reason));
+          };
           if (!startup.ok) {
-            release();
-            log("review-deny", { ...evidence, reason: startup.reason });
-            return deny(unavailableReason(startup.reason));
+            return operationalFailure(startup.reason);
           }
           const currentContext = yield* attempt(contextFor(call.sessionID));
           if (!currentContext.ok)
@@ -480,30 +516,19 @@ export default Plugin.define({
           const checked = yield* attemptPromise((signal) =>
             callCheck(config.binaryPath, request, config.timeoutMs, signal),
           );
-          if (!checked.ok) {
-            release();
-            log("review-deny", { ...evidence, reason: checked.reason });
-            return deny(
-              `the Command Reviewer was unavailable (${checked.reason})`,
-            );
-          }
-          let decision: Decision;
-          try {
-            decision = validateDecision(checked.value, request);
-          } catch (error) {
-            release();
-            const reason = errorMessage(error);
-            log("review-deny", { ...evidence, reason });
-            return deny(
-              `the Command Reviewer returned an invalid decision (${reason})`,
-            );
-          }
           const reconciledContext = yield* attempt(contextFor(call.sessionID));
           if (
             !reconciledContext.ok ||
             reconciledContext.value.generation !== generation
           )
             return deny("intent changed during review");
+          if (!checked.ok) return operationalFailure(checked.reason);
+          let decision: Decision;
+          try {
+            decision = validateDecision(checked.value, request);
+          } catch (error) {
+            return operationalFailure(errorMessage(error));
+          }
           const fingerprint = fingerprintFor(request);
           if (
             deniedResponses
@@ -675,7 +700,29 @@ export default Plugin.define({
           editor.update(item.id, (tool) => {
             const execute = tool.execute;
             tool.execute = (input, call) =>
-              execute(input, call).pipe(
+              Effect.suspend(() =>
+                active
+                  ? execute(input, call)
+                  : Effect.fail(
+                      new ToolError({
+                        message: blockedMessage(
+                          "Command Gate was unloaded; retry with a loaded Gate",
+                        ),
+                      }),
+                    ),
+              ).pipe(
+                Effect.raceFirst(
+                  Deferred.await(shutdown).pipe(
+                    Effect.flatMap(() =>
+                      Effect.fail(
+                        new ToolError({
+                          message:
+                            "Command Gate was unloaded during the native call. Execution was cancelled; earlier side effects may have occurred.",
+                        }),
+                      ),
+                    ),
+                  ),
+                ),
                 Effect.provideService(BoundCallRef, {
                   location: ctx.location.directory,
                   sessionID: call.sessionID,
@@ -727,13 +774,24 @@ export default Plugin.define({
         Effect.gen(function* () {
           const call = yield* BoundCallRef;
           if (!call) return;
+          if (!active)
+            return yield* Effect.die(
+              new ToolError({
+                message: blockedMessage(
+                  "Command Gate was unloaded; retry with a loaded Gate",
+                ),
+              }),
+            );
           let lock = locks.get(call.sessionID);
           if (!lock) {
             lock = Semaphore.makeUnsafe(1);
             locks.set(call.sessionID, lock);
           }
-          const outcome = yield* lock.withPermit(
-            reviewInvocation(invocation, call),
+          const outcome = yield* Effect.raceFirst(
+            lock.withPermit(reviewInvocation(invocation, call)),
+            Deferred.await(shutdown).pipe(
+              Effect.as(deny("Command Gate was unloaded during review")),
+            ),
           );
           if (outcome.kind === "deny")
             return yield* Effect.die(
@@ -788,7 +846,12 @@ export default Plugin.define({
       );
 
       yield* Effect.addFinalizer(() =>
-        Effect.sync(() => log("unload", { location: ctx.location.directory })),
+        Effect.gen(function* () {
+          active = false;
+          approvals.close();
+          yield* Deferred.succeed(shutdown, undefined);
+          log("unload", { location: ctx.location.directory });
+        }),
       );
     }),
 });

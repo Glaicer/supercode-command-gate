@@ -13,6 +13,7 @@ export default Plugin.define({
     let syncing = false;
     let active: string | null = null;
     let clearReady = false;
+    let diagnostic: string | null = null;
     const seen = new Set<string>();
     const unavailable = (error: unknown) =>
       ctx.ui.toast.show({
@@ -123,6 +124,24 @@ export default Plugin.define({
       syncing = true;
       try {
         await rpc.connect({ clientID });
+        const status = (await rpc.status({})) as {
+          healthy: boolean;
+          reason: string | null;
+          failureMode: string;
+        };
+        const message =
+          status.failureMode === "passthrough"
+            ? "UNREVIEWED mode: Reviewer operational failures execute without review. Explicit passthrough is enabled."
+            : !status.healthy
+              ? `Command Gate unavailable: ${status.reason}. Commands remain denied; fix aar doctor and reload.`
+              : null;
+        if (message && message !== diagnostic)
+          ctx.ui.toast.show({
+            title: "Command Gate",
+            message,
+            variant: "warning",
+          });
+        diagnostic = message;
         const pending = (await rpc.list({ clientID })) as PendingApproval[];
         if (active && !pending.some((item) => item.pendingID === active))
           ctx.ui.dialog.clear();

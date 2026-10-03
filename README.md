@@ -1,6 +1,6 @@
 # Command Gate V2
 
-Native Bash review for OpenCode **2.0.22**, using the existing `aar` Command Reviewer. This implementation supports automatic allow/deny and same-call **Deny / Allow once / Trust exact for session**. Failure/concurrency stress, RTK composition and packed-release verification remain separate tickets.
+Native Bash review for OpenCode **2.0.22**, using the existing `aar` Command Reviewer. This implementation supports automatic allow/deny and same-call **Deny / Allow once / Trust exact for session**, with failure/cancellation/concurrency regression coverage. RTK composition and packed-release verification remain separate tickets.
 
 ## Approval
 
@@ -45,7 +45,17 @@ The TUI half is discoverable through the server inventory; its operational setti
 | TUI heartbeat       | 5,000 ms   | Reconcile list and renew the approval adapter lease.                                                                                   |
 | Adapter lease       | 15,000 ms  | Missing renewals invalidate replies; pending waits detect lease loss within another 1,000 ms. Explicit disconnect refuses immediately. |
 
-Reviewer reservation expiry still applies: a response arriving before the human deadline can nevertheless fail `aar grant` if the reservation has expired. Grants remain in the Reviewer-owned state directory; the Gate does not add a grant store. Failure/concurrency stress and bounded long-lived state belong to ticket 05.
+Reviewer reservation expiry still applies: a response arriving before the human deadline can nevertheless fail `aar grant` if the reservation has expired. Grants remain in the Reviewer-owned state directory; the Gate does not add a grant store.
+
+## Failures and cancellation
+
+The default `onReviewerFailure: "deny"` keeps interception loaded when doctor is unhealthy or the binary is missing/incompatible. Invalid options always deny. Explicit `"passthrough"` permits operational Reviewer failures only, labelled **UNREVIEWED** in server diagnostics and a TUI warning fetched through public status RPC. Reviewer deny/ask, stale context, failed approval/grant, native deny, unsupported Bash/background invocation and invalid configuration never become passthrough.
+
+Gate-owned Reviewer operations are deadline-bound. On cancellation/deadline, POSIX Reviewer process groups receive SIGKILL (including descendants); the Effect finalizer joins subprocess close before releasing review state. Native command execution and its supervision remain entirely with OpenCode. Unload interrupts the wrapped native Effect, including pre-spawn permission waits; any already-running native process is cancelled by host supervision, never by a Gate spawner. RTK is disabled until ticket 06, so no rewriter process exists in this slice. Pending human waits remove timers/abort listeners on every terminal response, and plugin unload closes them and signals outstanding reviews. Captured old tool wrappers refuse after unload instead of executing without their removed shell hook. Restart/reload still resets persisted trust before first review.
+
+**Accepted fail-open gap:** an absent, disabled or failed-to-load plugin cannot intercept native commands. Inventory alone does not prove protection; inspect doctor/operational diagnostics. This is distinct from a loaded-but-unhealthy Gate, which denies by default.
+
+Same-session reviews and once consumption use a per-session permit over existing Reviewer locking. Invalidation advances context generation before resetting Reviewer state; reconciliation after review/grant refuses stale authorization. Main/child sessions and locations retain independent approval identities. RPC notifications are hints, not consent: list/get reconciliation and explicit matching replies are required.
 
 ## Intent and lifecycle
 
@@ -65,6 +75,7 @@ pnpm test:seam
 pnpm test:approval
 node --test test/lifecycle.test.mjs test/tui-actions.test.mjs
 node --test test/tui-layout.test.mjs
+node --test test/failures.test.mjs test/cancellation.test.mjs test/concurrency.test.mjs
 GATE_HUMAN=1 node --test test/human.test.mjs
 ```
 

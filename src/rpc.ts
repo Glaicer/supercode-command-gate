@@ -23,6 +23,10 @@ export const Approvals = Rpc.define({
     changed: { schema: { type: "object", additionalProperties: false } },
   },
   methods: {
+    status: {
+      input: object({}, []),
+      output: { type: "object" },
+    },
     connect: {
       input: object(client, ["clientID"]),
       output: { type: "object" },
