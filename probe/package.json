@@ -1,0 +1,17 @@
+{
+  "name": "command-gate-v2-contract-proof",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test contract.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "format:check": "prettier --check '*.mjs' '*.ts' '*.js' '*.json'"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.4",
+    "@opencode/plugin": "2.0.22",
+    "effect": "4.0.0-rc.112",
+    "prettier": "3.9.9",
+    "typescript": "7.0.2"
+  }
+}
