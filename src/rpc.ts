@@ -31,6 +31,13 @@ export const Approvals = Rpc.define({
       input: object(client, ["clientID"]),
       output: { type: "object" },
     },
+    clear: {
+      input: object(
+        { ...client, sessionID: { type: "string", minLength: 1 } },
+        ["clientID", "sessionID"],
+      ),
+      output: { type: "object" },
+    },
     list: {
       input: object({ ...client, sessionID: { type: "string" } }, ["clientID"]),
       output: { type: "array", items: { type: "object" } },
@@ -46,7 +53,10 @@ export const Approvals = Rpc.define({
       input: object(
         {
           ...binding,
-          decision: { type: "string", enum: ["once", "deny", "dismiss"] },
+          decision: {
+            type: "string",
+            enum: ["once", "session", "deny", "dismiss"],
+          },
         },
         [...Object.keys(binding), "decision"],
       ),

@@ -17,6 +17,7 @@ export type PendingApproval = CallIdentity & {
   effectSummary: string;
   preview: string;
   assessment: unknown;
+  grantEligible: boolean;
   purpose: null;
   expiresAt: number;
 };
@@ -29,7 +30,7 @@ export type ApprovalReply = Pick<
   | "callID"
   | "intentGeneration"
   | "fingerprint"
-> & { decision: "once" | "deny" | "dismiss" };
+> & { decision: "once" | "session" | "deny" | "dismiss" };
 
 type Waiting = {
   payload: PendingApproval;
@@ -63,6 +64,10 @@ export class ApprovalQueue {
     return fresh;
   }
 
+  connected(clientID: string): boolean {
+    return Date.now() < (this.#clients.get(clientID) ?? 0);
+  }
+
   disconnect(clientID: string): void {
     this.#clients.delete(clientID);
     for (const item of this.#pending.values()) {
@@ -87,7 +92,10 @@ export class ApprovalQueue {
 
   reply(input: ApprovalReply): boolean {
     const item = this.#pending.get(input.pendingID);
-    if (!item || !["once", "deny", "dismiss"].includes(input.decision))
+    if (
+      !item ||
+      !["once", "session", "deny", "dismiss"].includes(input.decision)
+    )
       return false;
     const keys = [
       "clientID",
@@ -98,6 +106,8 @@ export class ApprovalQueue {
       "fingerprint",
     ] as const;
     if (keys.some((key) => item.payload[key] !== input[key])) return false;
+    if (input.decision === "session" && !item.payload.grantEligible)
+      return false;
     if (
       Date.now() >= item.payload.expiresAt ||
       Date.now() >= (this.#clients.get(input.clientID) ?? 0)
@@ -111,6 +121,12 @@ export class ApprovalQueue {
 
   cancel(pendingID: string): void {
     this.#pending.get(pendingID)?.finish("stale");
+  }
+
+  invalidate(sessionID: string): void {
+    for (const item of this.#pending.values()) {
+      if (item.payload.sessionID === sessionID) item.finish("stale");
+    }
   }
 
   close(): void {
@@ -143,6 +159,7 @@ export class ApprovalQueue {
         effectSummary: decision.reason.replace(/\s+/g, " ").trim(),
         preview: maskCommand(request.command),
         assessment: decision.assessment,
+        grantEligible: decision.grantEligible,
         purpose: request.intent.purpose,
         expiresAt: Date.now() + timeoutMs,
       };

@@ -14,6 +14,7 @@ import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { runLifecycleCases } from "./lifecycle-driver.mjs";
 
 const exec = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -110,8 +111,12 @@ export async function runSeam(options = {}) {
         .filter((message) => message.role === "tool")
         .map((message) => message.content);
       const call = Boolean(
-        scenario?.call && toolResults.length < (scenario.repeat ?? 1),
+        scenario?.call &&
+        (scenario.remaining !== undefined
+          ? scenario.remaining > 0 && text.includes(scenario.token)
+          : toolResults.length < (scenario.repeat ?? 1)),
       );
+      if (call && scenario.remaining !== undefined) scenario.remaining--;
       modelRequests.push({ name: scenario?.name, call, toolResults });
       const delta = call
         ? {
@@ -119,7 +124,7 @@ export async function runSeam(options = {}) {
             tool_calls: [
               {
                 index: 0,
-                id: `call_${scenario.name.replaceAll("-", "_")}_${toolResults.length}`,
+                id: `call_${scenario.name.replaceAll("-", "_")}_${modelRequests.length}`,
                 type: "function",
                 function: {
                   name: scenario.call.tool,
@@ -169,6 +174,32 @@ export async function runSeam(options = {}) {
 
   const evidence = { version, root, reviewerCommit };
   try {
+    if (options.lifecycle) {
+      const scenario = {
+        name: "lifecycle-native",
+        remaining: 0,
+        call: { tool: "shell", arguments: { command: "bash lifecycle.sh" } },
+      };
+      cases = [scenario];
+      evidence.lifecycle = await boot({
+        name: "lifecycle",
+        root: `${root}/lifecycle`,
+        baseURL,
+        aar,
+        modelRequests,
+        assessorRequests,
+        cases: [],
+        lifecycle: scenario,
+      });
+      evidence.assessorRequests = assessorRequests;
+      evidence.modelRequests = modelRequests;
+      await writeFile(
+        `${root}/results.json`,
+        JSON.stringify(evidence, null, 2),
+      );
+      console.log(`Lifecycle evidence: ${root}/results.json`);
+      return evidence;
+    }
     if (options.approval) {
       const ask = (name, approval, extra = {}) => ({
         name,
@@ -210,6 +241,16 @@ export async function runSeam(options = {}) {
         },
         ask("ask-native-deny", "once"),
       ];
+      if (options.trust)
+        cases = [
+          ask("ask-session", "session", {
+            repeat: 2,
+            call: { tool: "shell", arguments: { command: "bash trusted.sh" } },
+            script:
+              "FIXTURE=fixture-ask printf 'once\\n' >> ask-session.marker\n",
+          }),
+          ask("ask-reconnect", "reconnect"),
+        ];
       if (options.human)
         cases = ["human-once", "human-deny"].map((name) => ({
           ...ask(name, null),
@@ -221,6 +262,14 @@ export async function runSeam(options = {}) {
             },
           },
         }));
+      if (options.tuiActions || options.humanTrust)
+        cases = ["human-once", "human-session", "human-deny"].map((name) => ({
+          ...ask(name, null),
+          human: true,
+          repeat: name === "human-deny" ? 1 : 2,
+          call: { tool: "shell", arguments: { command: "bash mutable.sh" } },
+          script: `FIXTURE=fixture-ask printf 'once\\n' >> ${name}.marker\n`,
+        }));
       if (options.layout) cases = cases.slice(0, 1);
       evidence.approval = await boot({
         name: "approval",
@@ -231,6 +280,7 @@ export async function runSeam(options = {}) {
         cases,
         human: options.human,
         layout: options.layout,
+        tuiActions: options.tuiActions,
         pluginOptions: { approvalTimeoutMs: options.human ? 600000 : 2000 },
         rules: () => [
           { action: "*", resource: "*", effect: "allow" },
@@ -241,7 +291,7 @@ export async function runSeam(options = {}) {
           },
         ],
       });
-      if (!options.human) {
+      if (!options.human && !options.trust) {
         cases = [
           ask("deny-note-failure", "deny", { repeat: 2 }),
           ask("denial-allow", "deny", {
@@ -626,6 +676,7 @@ async function boot(config) {
           package: gateDir,
           options: { binaryPath, ...(config.pluginOptions ?? {}) },
         },
+        ...(config.lifecycle ? [`${here}/admission-fixture`] : []),
       ],
       model: "proof-local/probe",
       providers: {
@@ -652,25 +703,29 @@ async function boot(config) {
     });
   });
   let logs = "";
-  const server = spawn(
-    opencode,
-    [
-      "serve",
-      "--hostname",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      "--log-level",
-      "debug",
-    ],
-    { cwd: `${root}/project`, env, stdio: ["ignore", "pipe", "pipe"] },
-  );
-  server.stdout.on("data", (data) => {
-    logs += data;
-  });
-  server.stderr.on("data", (data) => {
-    logs += data;
-  });
+  const startServer = () => {
+    const child = spawn(
+      opencode,
+      [
+        "serve",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        String(port),
+        "--log-level",
+        "debug",
+      ],
+      { cwd: `${root}/project`, env, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    child.stdout.on("data", (data) => {
+      logs += data;
+    });
+    child.stderr.on("data", (data) => {
+      logs += data;
+    });
+    return child;
+  };
+  let server = startServer();
   const stopServer = async () => {
     if (server.exitCode === null) {
       const exited = new Promise((resolve) => server.once("close", resolve));
@@ -695,7 +750,7 @@ async function boot(config) {
       throw Error(`${method} ${route}: ${response.status} ${text}`);
     return text ? JSON.parse(text) : null;
   };
-  try {
+  const waitReady = async () => {
     let ready = false;
     for (let index = 0; index < 100; index++) {
       try {
@@ -707,6 +762,14 @@ async function boot(config) {
       await delay(100);
     }
     if (!ready) throw Error(`Isolated server did not start (${config.name})`);
+  };
+  const restart = async () => {
+    await stopServer();
+    server = startServer();
+    await waitReady();
+  };
+  try {
+    await waitReady();
     const activation = await api("POST", "/api/session", {
       location: { directory: `${root}/project` },
       model: { providerID: "proof-local", id: "probe" },
@@ -746,6 +809,43 @@ async function boot(config) {
         )
       ).output;
     const clientID = "integration-adapter";
+    const launchLifecycleTui = async (sessionID) => {
+      await writeFile(
+        `${root}/config/opencode/cli.json`,
+        JSON.stringify({
+          tabs: { mode: "on" },
+          plugins: [gateDir, `${here}/clear-fixture`],
+        }),
+      );
+      const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+      const assignments = Object.entries({ ...env, CLEAR_SMOKE_ROOT: root })
+        .map(([key, value]) => `${key}=${quote(value)}`)
+        .join(" ");
+      const script = `${root}/launch-clear-tui.sh`;
+      await writeFile(
+        script,
+        `#!/bin/sh\nexec env -i ${assignments} ${quote(opencode)} --server http://127.0.0.1:${port} --session ${quote(sessionID)} ${quote(`${root}/project`)}\n`,
+      );
+      const capture = `${root}/clear-tui.capture`;
+      const done = exec("python3", [
+        `${here}/lifecycle-tui.py`,
+        script,
+        capture,
+      ]);
+      void done.catch(() => {});
+      return { done, stop: () => writeFile(`${capture}.stop`, "") };
+    };
+    const lifecycle = config.lifecycle
+      ? await runLifecycleCases({
+          api,
+          rpc,
+          root,
+          scenario: config.lifecycle,
+          restart,
+          launchTui: launchLifecycleTui,
+          assessorRequests: config.assessorRequests,
+        })
+      : null;
     const results = [];
     for (const scenario of config.cases) {
       const directory = scenario.directory ?? `${root}/project`;
@@ -776,8 +876,16 @@ async function boot(config) {
           `#!/bin/sh\ntrap ${quote(`touch ${quote(`${root}/human-tui.closed`)}`)} EXIT\nenv -i ${assignments} ${quote(opencode)} --server http://127.0.0.1:${port} --session ${quote(sessionID)} ${quote(directory)}\n`,
         );
         console.log(
-          `Human TUI: sh ${root}/launch-tui.sh; inspect details, choose Allow once for human-once, then Deny for human-deny, and exit.`,
+          config.tuiActions || config.layout
+            ? `Automated TUI fixture: ${root}/launch-tui.sh`
+            : `Human TUI: sh ${root}/launch-tui.sh; choose Allow once twice for human-once, Trust exact for session for human-session, then Deny for human-deny, and exit.`,
         );
+        if (config.tuiActions)
+          layoutCapture = exec("python3", [
+            `${here}/tui-actions.py`,
+            `${root}/launch-tui.sh`,
+            root,
+          ]);
         if (config.layout)
           layoutCapture = exec("python3", [
             `${here}/tui-layout.py`,
@@ -802,7 +910,7 @@ async function boot(config) {
       }
       if (scenario.script)
         await writeFile(
-          `${directory}/${scenario.approval === "script-deny" ? "denied-script.sh" : "mutable.sh"}`,
+          `${directory}/${scenario.approval === "session" ? "trusted.sh" : scenario.approval === "script-deny" ? "denied-script.sh" : "mutable.sh"}`,
           scenario.script,
         );
       await api("POST", `/api/session/${sessionID}/prompt`, {
@@ -826,7 +934,7 @@ async function boot(config) {
           callID: pending.callID,
           intentGeneration: pending.intentGeneration,
           fingerprint: pending.fingerprint,
-          decision: ["deny", "dismiss"].includes(scenario.approval)
+          decision: ["deny", "dismiss", "session"].includes(scenario.approval)
             ? scenario.approval
             : "once",
         };
@@ -868,6 +976,8 @@ async function boot(config) {
             ["session-event", "--session", sessionID, "--event", "clear"],
             { cwd: directory, env },
           );
+        if (scenario.approval === "reconnect")
+          await rpc("connect", { clientID: "replacement-adapter" });
         if (scenario.approval === "disconnect")
           await rpc("disconnect", { clientID });
         else if (scenario.approval === "cancel")
@@ -920,6 +1030,20 @@ async function boot(config) {
         let finished = false;
         for (let index = 0; index < 6050; index++) {
           const context = await api("GET", `/api/session/${sessionID}/context`);
+          if (config.tuiActions) {
+            const events = parseGateEvents(logs).filter(
+              (event) =>
+                event.session === sessionID && event.kind === "human-response",
+            );
+            await writeFile(
+              `${root}/ui-progress.json`,
+              JSON.stringify({
+                name: scenario.name,
+                responses: events.length,
+                finished: JSON.stringify(context).includes("FINISHED"),
+              }),
+            );
+          }
           if (JSON.stringify(context).includes("FINISHED")) {
             finished = true;
             break;
@@ -972,7 +1096,7 @@ async function boot(config) {
     if (layoutCapture) await layoutCapture;
     if (config.human) {
       console.log(
-        "Both human responses finished; please exit the temporary TUI.",
+        "Human-response scenarios finished; please exit the temporary TUI.",
       );
       let closed = false;
       for (let index = 0; index < 6000; index++) {
@@ -1023,6 +1147,7 @@ async function boot(config) {
     }
     return {
       name: config.name,
+      lifecycle,
       inventoryOK,
       canonicalWorkdir: await realpath(`${root}/project/other`).catch(
         () => null,
@@ -1044,7 +1169,7 @@ async function boot(config) {
 
 async function collectGateText(root, captured) {
   let text = captured;
-  const logDir = `${root}/state/opencode/log`;
+  const logDir = `${root}/data/opencode/log`;
   const entries = await readdir(logDir).catch(() => []);
   for (const entry of entries) {
     if (!entry.endsWith(".log")) continue;

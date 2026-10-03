@@ -1,4 +1,5 @@
 import { Plugin } from "@opencode/plugin/tui";
+import { createSignal, untrack } from "solid-js";
 import { Approvals } from "./rpc.ts";
 import { CLIENT_HEARTBEAT_MS, type PendingApproval } from "./approval.ts";
 
@@ -11,6 +12,7 @@ export default Plugin.define({
     let showing = false;
     let syncing = false;
     let active: string | null = null;
+    let clearReady = false;
     const seen = new Set<string>();
     const unavailable = (error: unknown) =>
       ctx.ui.toast.show({
@@ -72,6 +74,9 @@ export default Plugin.define({
             options: [
               { title: "Deny", value: "deny" },
               { title: "Allow once", value: "once" },
+              ...(item.grantEligible
+                ? [{ title: "Trust exact for session", value: "session" }]
+                : []),
               { title: "Full details", value: "details" },
             ],
           });
@@ -114,7 +119,7 @@ export default Plugin.define({
       }
     };
     const sync = async () => {
-      if (disposed || syncing) return;
+      if (disposed || syncing || !clearReady) return;
       syncing = true;
       try {
         await rpc.connect({ clientID });
@@ -137,10 +142,71 @@ export default Plugin.define({
       if (event.location.directory === location.directory) void sync();
     });
     const heartbeat = setInterval(() => void sync(), CLIENT_HEARTBEAT_MS);
-    void sync();
+    const stopSlot = ctx.ui.slot({
+      append: "app",
+      render: () =>
+        untrack(() => {
+          const nativeClear = ctx.keymap
+            .commands()
+            .find((command) => command.slash?.name === "clear");
+          if (!nativeClear?.id) {
+            unavailable(
+              "Native /clear bridge is unavailable; approval adapter is disabled",
+            );
+            return null;
+          }
+          const [clearing, setClearing] = createSignal(false);
+          ctx.keymap.layer(() => ({
+            mode: "global",
+            priority: 10,
+            commands: clearing()
+              ? []
+              : [
+                  {
+                    ...nativeClear,
+                    run: async (input, event) => {
+                      const route = { ...ctx.ui.router.current() };
+                      try {
+                        if (route.type === "session") {
+                          const result = (await rpc.clear({
+                            clientID,
+                            sessionID: route.sessionID,
+                          })) as { invalidated: boolean };
+                          if (!result.invalidated)
+                            throw new Error(
+                              "Reviewer clear failed; native /clear was not dispatched",
+                            );
+                          const current = ctx.ui.router.current();
+                          if (
+                            current.type !== "session" ||
+                            current.sessionID !== route.sessionID
+                          )
+                            throw new Error(
+                              "Session changed during clear; native /clear was not dispatched",
+                            );
+                        }
+                        setClearing(true);
+                        try {
+                          await nativeClear.run(input, event);
+                        } finally {
+                          setClearing(false);
+                        }
+                      } catch (error) {
+                        unavailable(error);
+                      }
+                    },
+                  },
+                ],
+          }));
+          clearReady = true;
+          void sync();
+          return null;
+        }),
+    });
     return () => {
       disposed = true;
       clearInterval(heartbeat);
+      stopSlot();
       stop();
       if (active) ctx.ui.dialog.clear();
       void rpc.disconnect({ clientID }).catch(() => {});

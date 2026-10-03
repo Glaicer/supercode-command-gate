@@ -43,6 +43,10 @@ export class GateState {
     this.#intents.set(sessionID, { id: messageID, text });
   }
 
+  forgetIntent(sessionID: string): void {
+    this.#intents.delete(sessionID);
+  }
+
   intentFor(
     sessionID: string,
     parentID: string | undefined,

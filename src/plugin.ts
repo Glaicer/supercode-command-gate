@@ -1,6 +1,6 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { Context, Effect, Semaphore } from "effect";
+import { Context, Effect, Semaphore, Stream } from "effect";
 import { Plugin } from "@opencode/plugin/effect";
 import { Error as ToolError } from "@opencode/plugin/promise/tool";
 import type { ShellCreateBefore } from "@opencode/plugin/effect/shell";
@@ -28,6 +28,7 @@ import {
   type AuthorizingRecord,
   type CallIdentity,
 } from "./state.ts";
+import type { Intent } from "./state.ts";
 import { ApprovalQueue, type ApprovalReply } from "./approval.ts";
 import { Approvals } from "./rpc.ts";
 
@@ -121,43 +122,171 @@ export default Plugin.define({
       });
       const locks = new Map<string, Semaphore.Semaphore>();
       const contexts = new Map<string, string>();
+      const epochs = new Map<string, number>();
+      const parents = new Map<string, string>();
+      const requests = new Map<string, Request>();
+      const goals = new Map<string, string>();
+      const admissions = new Map<string, Set<string>>();
+      const invalidate = (sessionID: string, event: string) =>
+        Effect.gen(function* () {
+          const family = new Set([sessionID]);
+          for (const parent of family)
+            for (const [child, owner] of parents)
+              if (owner === parent) family.add(child);
+          for (const id of family) {
+            epochs.set(id, (epochs.get(id) ?? 0) + 1);
+            contexts.delete(id);
+            deniedResponses.delete(id);
+            approvals.invalidate(id);
+            if (event === "clear" || event === "end") {
+              state.forgetIntent(id);
+            }
+          }
+          let invalidated = true;
+          for (const id of family) {
+            const request =
+              requests.get(id) ??
+              buildRequest(
+                { command: "true", cwd: ctx.location.directory, env: {} },
+                {
+                  sessionID: id,
+                  intentId: null,
+                  goal: null,
+                  latestUserRequest: null,
+                },
+                ctx.location.directory,
+              );
+            const reset = yield* attemptPromise((signal) =>
+              callAction(
+                config.binaryPath,
+                request,
+                "session-event",
+                ["--event", event],
+                config.timeoutMs,
+                signal,
+              ),
+            );
+            if (!reset.ok) invalidated = false;
+            log("invalidation", { session: id, event, ok: reset.ok });
+          }
+          return invalidated;
+        });
+      let clientGeneration = 0;
+      let connectedBefore = false;
       const deniedResponses = new Map<
         string,
         { generation: string; fingerprints: Set<string> }
       >();
+      const admit = (sessionID: string, messageID: string, text: string) =>
+        Effect.gen(function* () {
+          const seen = admissions.get(sessionID) ?? new Set<string>();
+          admissions.set(sessionID, seen);
+          const previous = state.intentFor(sessionID, undefined);
+          if (
+            seen.has(messageID) &&
+            (previous?.id !== messageID || previous.text === text)
+          )
+            return;
+          seen.add(messageID);
+          yield* invalidate(sessionID, "new-intent");
+          state.admit(sessionID, messageID, text);
+        });
       const contextFor = (sessionID: string) =>
         Effect.gen(function* () {
-          const info = yield* ctx.session.get({ sessionID } as Parameters<
-            typeof ctx.session.get
-          >[0]);
-          if (info.location.directory !== ctx.location.directory)
-            throw new Error("owning session belongs to a different location");
-          const intent = state.intentFor(sessionID, info.parentID);
-          const goal = goalFromMetadata(info.metadata);
+          const clientEpoch = clientGeneration;
+          const lineage: {
+            id: string;
+            epoch: number;
+            goal: string;
+            intent: Intent | null;
+          }[] = [];
+          let id: string | undefined = sessionID;
+          let intent: Intent | undefined;
+          let goal: string | null = null;
+          while (id) {
+            if (lineage.some((entry) => entry.id === id))
+              throw new Error("cyclic session parent relationship");
+            const epoch = epochs.get(id) ?? 0;
+            const info: Effect.Success<ReturnType<typeof ctx.session.get>> =
+              yield* ctx.session.get({ sessionID: id } as Parameters<
+                typeof ctx.session.get
+              >[0]);
+            if (info.location.directory !== ctx.location.directory)
+              throw new Error("owning session belongs to a different location");
+            if (!epochs.has(id)) epochs.set(id, epoch);
+            if (info.parentID) parents.set(id, info.parentID);
+            else parents.delete(id);
+            const messages = yield* ctx.session.context({
+              sessionID: id,
+            } as Parameters<typeof ctx.session.context>[0]);
+            if ((epochs.get(id) ?? 0) !== epoch)
+              throw new Error("intent changed during reconciliation");
+            const latest = messages.findLast(
+              (message) => message.type === "user",
+            );
+            const seen = admissions.get(id) ?? new Set<string>();
+            admissions.set(id, seen);
+            for (const message of messages)
+              if (message.type === "user" && message.id !== latest?.id)
+                seen.add(message.id);
+            if (latest?.type === "user")
+              yield* admit(id, latest.id, latest.text);
+            const goalSignature = JSON.stringify(info.metadata?.goal ?? null);
+            if (goals.has(id) && goals.get(id) !== goalSignature)
+              yield* invalidate(id, "goal-change");
+            goals.set(id, goalSignature);
+            const ownIntent = state.intentFor(id, undefined);
+            intent ??= ownIntent;
+            if (id === sessionID) goal = goalFromMetadata(info.metadata);
+            lineage.push({
+              id,
+              epoch: epochs.get(id) ?? 0,
+              goal: goalSignature,
+              intent: ownIntent ?? null,
+            });
+            id = info.parentID;
+          }
+          if (
+            clientEpoch !== clientGeneration ||
+            lineage.some((entry) => entry.epoch !== (epochs.get(entry.id) ?? 0))
+          )
+            throw new Error("intent changed during reconciliation");
           const generation = createHash("sha256")
-            .update(
-              JSON.stringify({
-                intent: intent ?? null,
-                goal: info.metadata?.goal ?? null,
-                parentID: info.parentID ?? null,
-              }),
-            )
+            .update(JSON.stringify({ lineage, clientEpoch }))
             .digest("hex");
           return { intent, goal, generation };
         });
       const registration = yield* ctx.rpc
         .register(Approvals, {
           connect: (input) =>
-            Effect.sync(() => {
+            Effect.gen(function* () {
               const clientID = (input as { clientID: string }).clientID;
-              if (approvals.connect(clientID))
+              if (approvals.connect(clientID)) {
+                if (connectedBefore) {
+                  clientGeneration++;
+                  for (const sessionID of [...epochs.keys()])
+                    yield* invalidate(sessionID, "new-intent");
+                }
+                connectedBefore = true;
                 log("approval-client", { clientID });
+              }
               return { connected: true };
             }),
           disconnect: (input) =>
             Effect.sync(() => {
               approvals.disconnect((input as { clientID: string }).clientID);
               return { disconnected: true };
+            }),
+          clear: (input) =>
+            Effect.gen(function* () {
+              const { clientID, sessionID } = input as {
+                clientID: string;
+                sessionID: string;
+              };
+              if (!approvals.connected(clientID)) return { invalidated: false };
+              const current = yield* attempt(contextFor(sessionID));
+              if (!current.ok) return { invalidated: false };
+              return { invalidated: yield* invalidate(sessionID, "clear") };
             }),
           list: (input) =>
             Effect.sync(() => {
@@ -259,24 +388,14 @@ export default Plugin.define({
             );
           }
           const release = () => state.release(call);
-          const session = yield* attempt(
-            ctx.session.get({ sessionID: call.sessionID } as Parameters<
-              typeof ctx.session.get
-            >[0]),
-          );
-          if (!session.ok) {
-            release();
-            return deny("the owning session could not be resolved");
-          }
-          const info = session.value;
-          if (info.location.directory !== call.location) {
+          const initialContext = yield* attempt(contextFor(call.sessionID));
+          if (!initialContext.ok) {
             release();
             return deny(
-              "the owning session belongs to a different location; this Gate refuses the invocation",
+              `the owning session could not be reconciled (${initialContext.reason})`,
             );
           }
-          const intent = state.intentFor(call.sessionID, info.parentID);
-          const goal = goalFromMetadata(info.metadata);
+          const { intent, goal } = initialContext.value;
           let request: Request;
           try {
             request = buildRequest(
@@ -299,6 +418,7 @@ export default Plugin.define({
               `the actual working directory could not be resolved (${errorMessage(error)})`,
             );
           }
+          requests.set(call.sessionID, request);
           let grantMayExist = false;
           yield* Effect.addFinalizer(() =>
             Effect.gen(function* () {
@@ -378,6 +498,12 @@ export default Plugin.define({
               `the Command Reviewer returned an invalid decision (${reason})`,
             );
           }
+          const reconciledContext = yield* attempt(contextFor(call.sessionID));
+          if (
+            !reconciledContext.ok ||
+            reconciledContext.value.generation !== generation
+          )
+            return deny("intent changed during review");
           const fingerprint = fingerprintFor(request);
           if (
             deniedResponses
@@ -420,7 +546,7 @@ export default Plugin.define({
                 signal,
               ),
             );
-            if (!response.ok || response.value !== "once") {
+            if (!response.ok || !["once", "session"].includes(response.value)) {
               if (response.ok && response.value === "deny") {
                 const noted = yield* attemptPromise((signal) =>
                   callAction(
@@ -477,7 +603,7 @@ export default Plugin.define({
                   "--fingerprint",
                   decision.requestFingerprint,
                   "--scope",
-                  "once",
+                  response.value,
                 ],
                 config.timeoutMs,
                 signal,
@@ -485,7 +611,7 @@ export default Plugin.define({
             );
             if (!granted.ok)
               return deny(
-                `Allow once could not be recorded (${granted.reason})`,
+                `Approval Grant could not be recorded (${granted.reason})`,
               );
             const fresh = yield* attemptPromise((signal) =>
               callCheck(
@@ -514,14 +640,14 @@ export default Plugin.define({
               !reviewed ||
               reviewed.decision !== "allow" ||
               reviewed.source !== "grant" ||
-              reviewed.grantScope !== "once" ||
+              reviewed.grantScope !== response.value ||
               reviewed.requestFingerprint !== decision.requestFingerprint
             ) {
               return deny(
                 !reconciled.ok
                   ? reconciled.reason
                   : (reviewed?.reason ??
-                      "fresh review did not consume the matching once grant"),
+                      "fresh review did not match the Approval Grant"),
               );
             }
             grantMayExist = false;
@@ -629,9 +755,36 @@ export default Plugin.define({
       );
 
       yield* ctx.session.hook("prompt", (event) =>
-        Effect.sync(() => {
-          state.admit(event.sessionID, event.messageID, event.prompt.text);
+        Effect.gen(function* () {
+          yield* invalidate(event.sessionID, "new-intent");
         }),
+      );
+      yield* ctx.event.subscribe().pipe(
+        Stream.runForEach((event) =>
+          Effect.gen(function* () {
+            if (
+              event.type === "session.deleted" &&
+              epochs.has(event.data.sessionID)
+            )
+              yield* invalidate(event.data.sessionID, "end");
+            if (
+              event.type === "session.metadata.updated" &&
+              goals.has(event.data.sessionID)
+            )
+              yield* attempt(contextFor(event.data.sessionID));
+            if (
+              event.type === "session.inbox.enqueued" &&
+              event.data.item.type === "user" &&
+              epochs.has(event.data.sessionID)
+            )
+              yield* admit(
+                event.data.sessionID,
+                event.data.inboxID,
+                event.data.item.payload.text,
+              );
+          }),
+        ),
+        Effect.forkScoped,
       );
 
       yield* Effect.addFinalizer(() =>
