@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@supercode/command-gate",
+  "version": "1.0.0",
+  "private": false,
+  "type": "module",
+  "description": "OpenCode V2 Command Gate for the aar Command Reviewer",
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./plugin": "./src/plugin.ts"
+  },
+  "files": [
+    "README.md",
+    "index.ts",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node --test 'src/**/*.test.ts'",
+    "test:seam": "node --test test/seam.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "format:check": "prettier --check 'src/**/*.ts' 'test/**/*.mjs' '*.ts' '*.json'"
+  },
+  "//": "Pins verified 2026-10-03 against registry.npmjs.org: @opencode/plugin must equal the host version (2.0.22) and declares effect 4.0.0-rc.112 itself, so both stay exact here.",
+  "dependencies": {
+    "@opencode/plugin": "2.0.22",
+    "effect": "4.0.0-rc.112"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.4",
+    "prettier": "3.9.9",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=24",
+    "opencode": "2.0.22"
+  }
+}
