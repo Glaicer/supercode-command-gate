@@ -1,0 +1,1 @@
+{"schemaVersion":"aar-request-v1","command":"printf 'literal $HOME'","cwd":"/workspace/project","workspaceRoot":null,"env":{"PWD":"/workspace/project"},"session":{"id":"golden-session","host":"opencode","intentId":"intent-1"},"intent":{"goal":"inspect the workspace","latestUserRequest":"show me the current directory","purpose":"read-only inspection"}}

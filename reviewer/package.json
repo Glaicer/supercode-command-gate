@@ -1,0 +1,33 @@
+{
+  "name": "@supercode/command-gate",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "OpenCode Command Gate for the aar reviewer",
+  "main": "./plugin/command-gate.ts",
+  "exports": {
+    ".": "./plugin/command-gate.ts"
+  },
+  "files": [
+    "README.md",
+    "plugin/command-gate.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node --test test/command-gate.test.js test/assessor-smoke.test.mjs test/release-packaging.test.mjs",
+    "test:integration": "node test/opencode-integration.test.js",
+    "test:corpus": "node test/corpus-coverage.mjs",
+    "test:smoke": "node test/assessor-smoke.mjs",
+    "test:packaging": "node --test test/release-packaging.test.mjs",
+    "release:reviewer": "sh scripts/release.sh"
+  },
+  "engines": {
+    "opencode": "1.18.21"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "1.18.21",
+    "@opencode-ai/sdk": "1.18.21"
+  }
+}

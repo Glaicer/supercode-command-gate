@@ -1,0 +1,28 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "bash": {
+      "*": "allow",
+      "mkfs*": "deny",
+      "dd *": "deny",
+      "shutdown *": "deny",
+      "reboot*": "deny"
+    },
+    "read": "allow",
+    "list": "allow"
+  },
+"plugin": ["./.opencode/plugins/command-gate.ts"],
+  "gate": {
+    "tools": ["bash", "shell"],
+    "onReviewerFailure": "deny",
+    "commandRewriter": "none"
+  },
+  "provider": {
+    "fake": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Auto Approval Test Model",
+      "options": { "baseURL": "http://127.0.0.1:FAKE_PORT/v1", "apiKey": "sk-fake" },
+      "models": { "probe-model": { "name": "Probe Model" } }
+    }
+  }
+}

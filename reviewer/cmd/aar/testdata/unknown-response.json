@@ -1,0 +1,1 @@
+{"assessment":null,"auditId":"__audit_id__","decision":"allow","grantEligible":false,"reason":"the complete program uses only read-only primitives and safe paths","requestFingerprint":"__request_fingerprint__","rule":"AA003","schemaVersion":"aar-decision-v1","source":"auto-allow"}

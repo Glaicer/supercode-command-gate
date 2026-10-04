@@ -1,0 +1,1 @@
+{"assessment":null,"auditId":"__audit_id__","decision":"allow","grantEligible":false,"reason":"pwd only reads the current working directory","requestFingerprint":"__request_fingerprint__","rule":"AA001","schemaVersion":"aar-decision-v1","source":"auto-allow"}

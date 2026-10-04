@@ -30,9 +30,25 @@ Only an explicit, matching human reply can create `aar grant --scope once` or `a
 
 Deny records `aar deny-note` and retains the exact denial in memory until intent/Goal changes. This remains authoritative if the CLI fails, a later assessor allows, or another command's failed approval resets Reviewer state. No working adapter, disconnect, expiry, cancellation, stale/duplicate reply or failed grant means no execution.
 
+## Command Reviewer (`aar`)
+
+The Reviewer source lives in this repository at `reviewer/`; the upstream GitHub repository is archived and no longer published. The vendored tree contains the Go module (`cmd/aar`, `internal/reviewer`), the historical V1 Gate sources (`reviewer/plugin/`) and the Reviewer README with policy profiles, grants and audit details. npm packaging excludes it: the package `files` whitelist ships only `README.md`, the root forwarders and `dist/`.
+
+Build and install (Go 1.27 toolchain):
+
+```sh
+cd reviewer
+go test ./...
+AAR_RELEASE_VERSION=<version> ./scripts/release.sh
+install dist/reviewer-v<version>/aar-v<version>-<os>-<arch> ~/.local/bin/aar
+aar doctor
+```
+
+`release.sh` emits static binaries for linux-amd64, linux-arm64, darwin-amd64 and darwin-arm64 plus `SHA256SUMS`. For a single local binary, `go build -o aar ./cmd/aar` is enough. Reviewer configuration is owned by the Reviewer itself — `$AAR_CONFIG`, then `$XDG_CONFIG_HOME/aar/config.toml`, then the platform config path, overlaid by a project `.aar.toml`; see `reviewer/README.md`.
+
 ## Installation and migration from V1
 
-Install the existing separate Reviewer binary for Linux amd64/arm64 or macOS amd64/arm64, verify its release checksum, and make `aar doctor` pass. The Gate neither embeds, builds nor downloads `aar`. Windows and non-Bash execution are unsupported. Reviewer policy/provider/profile/grant settings remain in the Reviewer configuration; plugin options below configure only the Gate.
+Build the separate Reviewer from the source vendored in `reviewer/` for Linux amd64/arm64 or macOS amd64/arm64 — or reuse an already released binary — and make `aar doctor` pass. The Gate neither embeds, builds nor downloads `aar` at runtime. Windows and non-Bash execution are unsupported. Reviewer policy/provider/profile/grant settings remain in the Reviewer configuration; plugin options below configure only the Gate.
 
 After the V2 package is published, use the native flow (this ticket does **not** publish it or install into your real setup):
 
