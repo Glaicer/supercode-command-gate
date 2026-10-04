@@ -1,6 +1,6 @@
 # Command Gate V2 public-contract proof
 
-Disposable proof for ticket `../docs/.scratch/issues/01-v2-contract-proof.md`, not a production Gate. Target: OpenCode **2.0.22** only. Do not install this plugin into a personal service: it intentionally contains observational bypasses and late-mutator fixtures.
+Disposable proof for ticket `../../../.scratch/029-command-gate-v2/issues/01-v2-contract-proof.md`, not a production Gate. Target: OpenCode **2.0.22** only. Do not install this plugin into a personal service: it intentionally contains observational bypasses and late-mutator fixtures.
 
 ## Reproduce
 
