@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { CallIdentity } from "./state.ts";
 import type { Request } from "./request.ts";
 import type { Decision } from "./reviewer.ts";
+import { redactText } from "./approval-text.ts";
 
 export const CLIENT_LEASE_MS = 15000;
 export const CLIENT_HEARTBEAT_MS = 5000;
@@ -38,14 +39,7 @@ type Waiting = {
 };
 
 function maskCommand(command: string): string {
-  const masked = command
-    .replace(/(Bearer\s+)[^\s'"`]+/gi, "$1[REDACTED]")
-    .replace(
-      /((?:token|password|secret|api[_-]?key)[^=\s]*\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s]+)/gi,
-      "$1[REDACTED]",
-    )
-    .replace(/(https?:\/\/[^/\s:@]+:)[^@\s]+(@)/gi, "$1[REDACTED]$2")
-    .replace(/\bsk-[A-Za-z0-9_-]+/g, "sk-[REDACTED]");
+  const masked = redactText(command);
   return masked.length > 240 ? `${masked.slice(0, 237)}...` : masked;
 }
 

@@ -53,7 +53,7 @@ try:
                 details_start = len(output)
             elif (
                 opened_details
-                and b"not supplied" in output[details_start:]
+                and b"None reported" in output[details_start:]
             ):
                 os.write(master, b"\x1b")
                 break
@@ -80,10 +80,10 @@ finally:
                     "deny": "Deny",
                     "once": "Allow once",
                     "details": "Full details",
-                    "cwd": "cwd:",
-                    "preview": "Preview:",
+                    "cwd": "Working directory:",
+                    "preview": "Command:",
                     "masked": "[REDACTED]",
-                    "assessment": "RiskAssessment",
+                    "assessment": "Severity:",
                     "full_command": "demo-secret",
                 }.items()
             } | {

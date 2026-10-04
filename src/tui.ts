@@ -2,6 +2,11 @@ import { Plugin } from "@opencode/plugin/tui";
 import { createSignal, untrack } from "solid-js";
 import { Approvals } from "./rpc.ts";
 import { CLIENT_HEARTBEAT_MS, type PendingApproval } from "./approval.ts";
+import {
+  approvalSummary,
+  approvalDetails,
+  approvalTechnicalDetails,
+} from "./approval-text.ts";
 
 export default Plugin.define({
   id: "command-gate-tui",
@@ -65,8 +70,10 @@ export default Plugin.define({
       active = item.pendingID;
       seen.add(item.pendingID);
       try {
-        const summary = `Effect: ${item.effectSummary}\ncwd: ${item.cwd}\nPreview: ${item.preview}\nSession: ${item.sessionID}\nCall: ${item.callID}`;
-        const read = await readText("Command Gate — summary", summary);
+        const read = await readText(
+          "Command Gate — command needs approval",
+          approvalSummary(item),
+        );
         let choice: string | undefined;
         while (read && !disposed) {
           const selected = ctx.ui.dialog.select({
@@ -79,15 +86,21 @@ export default Plugin.define({
                 ? [{ title: "Trust exact for session", value: "session" }]
                 : []),
               { title: "Full details", value: "details" },
+              { title: "Technical details", value: "technical" },
             ],
           });
           ctx.ui.dialog.set({ size: "xlarge", centered: true });
           choice = await selected;
-          if (choice !== "details" || disposed) break;
+          if (!["details", "technical"].includes(choice ?? "") || disposed)
+            break;
           if (
             !(await readText(
-              "Full details — may contain secrets",
-              `Command:\n${item.command}\n\nRiskAssessment:\n${JSON.stringify(item.assessment, null, 2)}\n\nFingerprint: ${item.fingerprint}\nPurpose: not supplied`,
+              choice === "technical"
+                ? "Technical details — may contain secrets"
+                : "Full details — may contain secrets",
+              choice === "technical"
+                ? approvalTechnicalDetails(item)
+                : approvalDetails(item),
             ))
           ) {
             choice = undefined;
