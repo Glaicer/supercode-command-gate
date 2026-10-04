@@ -6,6 +6,7 @@ import {
   approvalDetails,
   approvalTechnicalDetails,
   redactText,
+  approvalPages,
 } from "./approval-text.ts";
 
 const risk = {
@@ -46,7 +47,7 @@ test("summary puts the highest-severity risk and evidence before the working dir
   assert.match(summary, /Severity: Critical · Likelihood: Possible/);
   assert.match(summary, /Reversible: Yes · Protected paths affected: Yes/);
   assert.match(summary, /Evidence:\nThe script can overwrite protected files/);
-  assert.match(summary, /2 more risks — see Full details/);
+  assert.match(summary, /2 more risks — see Details/);
   assert.ok(
     summary.indexOf("Evidence:") < summary.indexOf("Working directory:"),
   );
@@ -69,8 +70,8 @@ test("summary keeps the first risk on severity ties and uses singular counts", (
       uncertainties: ["Script contents are incomplete"],
     },
   });
-  assert.match(summary, /1 more risk — see Full details/);
-  assert.match(summary, /1 uncertainty — see Full details/);
+  assert.match(summary, /1 more risk — see Details/);
+  assert.match(summary, /1 uncertainty — see Details/);
   assert.ok(!summary.includes("Second critical risk"));
   assert.ok(!approvalSummary(item).includes("more risk"));
 });
@@ -113,7 +114,7 @@ test("details show every risk and uncertainty without JSON or technical identifi
     },
   });
   for (const shown of [
-    item.command,
+    item.preview,
     "Risk 1 of 2",
     "Risk 2 of 2",
     "Risk: Network access",
@@ -131,6 +132,10 @@ test("details show every risk and uncertainty without JSON or technical identifi
     '"risks"',
   ])
     assert.ok(!details.includes(hidden));
+  assert.ok(!details.includes(item.command));
+  assert.ok(
+    details.indexOf("Risk 1 of 2") < details.indexOf("Command preview"),
+  );
   assert.match(approvalDetails(item), /Uncertainties:\nNone reported/);
 });
 
@@ -156,4 +161,47 @@ test("technical details retain identifiers and the complete raw assessment", () 
     JSON.stringify(item.assessment, null, 2),
   ])
     assert.ok(details.includes(value));
+});
+
+test("long masked previews are explicitly shortened and follow the risk information", () => {
+  const command = `API_TOKEN=demo-secret printf '${"x".repeat(500)}'`;
+  const preview = `${redactText(command).slice(0, 237)}...`;
+  const pending = { ...item, command, preview };
+  const summary = approvalSummary(pending);
+  assert.match(summary, /Command preview \(shortened\):/);
+  assert.ok(summary.indexOf("Evidence:") < summary.indexOf("Command preview"));
+  assert.ok(!summary.includes("demo-secret"));
+  assert.ok(!approvalSummary(item).includes("shortened"));
+  assert.ok(!approvalDetails(pending).includes(command));
+  assert.match(approvalDetails(pending), /Command preview \(shortened\):/);
+});
+
+test("command pages preserve every character, including spaces at presentation breaks", () => {
+  assert.deepEqual(approvalPages("1234567890  abcdef", 8, 2), [
+    "12345678\n90  abcd",
+    "ef",
+  ]);
+  const command = `printf '${"x".repeat(4000)}'; printf FINAL_COMMAND_LINE`;
+  const pages = approvalPages(command, 57, 14);
+  assert.ok(pages.length > 1);
+  assert.equal(pages.join("").replaceAll("\n", ""), command);
+  assert.ok(pages.at(-1)?.includes("FINAL_COMMAND_LINE"));
+});
+
+test("pages keep Unicode graphemes intact within a conservative cell budget", () => {
+  assert.deepEqual(approvalPages("A界B🙂e\u0301👩‍💻Z", 4, 2), [
+    "A界B\n🙂e\u0301",
+    "👩‍💻Z",
+  ]);
+});
+
+test("multiline scripts, heredocs and quoted shell punctuation are not rewritten", () => {
+  const command =
+    "node <<'SCRIPT' | cat\n  console.log('quoted ; | 界');\n\nSCRIPT\nprintf 'outside'; echo end\n";
+  assert.deepEqual(approvalPages(command, 120, 3), [
+    "node <<'SCRIPT' | cat\n  console.log('quoted ; | 界');\n",
+    "SCRIPT\nprintf 'outside'; echo end\n",
+  ]);
+  const crlf = "node -e 'console.log(1); console.log(2)'\r\n";
+  assert.deepEqual(approvalPages(crlf, 120, 3), [crlf]);
 });

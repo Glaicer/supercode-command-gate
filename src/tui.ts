@@ -6,6 +6,7 @@ import {
   approvalSummary,
   approvalDetails,
   approvalTechnicalDetails,
+  approvalPages,
 } from "./approval-text.ts";
 
 export default Plugin.define({
@@ -27,43 +28,59 @@ export default Plugin.define({
         variant: "error",
       });
     const readText = async (title: string, message: string) => {
-      const width = Math.max(1, Math.min(116, ctx.renderer.width - 2) - 5);
-      const pageHeight = Math.max(1, ctx.renderer.height - 10);
-      const lines = message.split("\n").flatMap((line) => {
-        const characters = Array.from(line);
-        if (!characters.length) return [""];
-        const wrapped: string[] = [];
-        while (characters.length > width) {
-          let end = width;
-          for (let index = width; index > 0; index--) {
-            if (/\s/u.test(characters[index])) {
-              end = index;
-              break;
-            }
+      let cursor = 0;
+      while (!disposed) {
+        const width = Math.max(1, Math.min(116, ctx.renderer.width - 2) - 5);
+        const pageHeight = Math.max(1, ctx.renderer.height - 10);
+        const pages = approvalPages(message, width, pageHeight);
+        let end = 0;
+        const ends = pages.map((text) => {
+          for (const row of text.split("\n")) {
+            end += row.length;
+            if (message[end] === "\n") end++;
           }
-          wrapped.push(characters.splice(0, end).join(""));
-          while (characters[0] === " ") characters.shift();
-        }
-        wrapped.push(characters.join(""));
-        return wrapped;
-      });
-      const pages = Math.ceil(lines.length / pageHeight);
-      for (let page = 0; page < pages; page++) {
-        if (disposed) return false;
-        const shown = ctx.ui.dialog.confirm({
-          title: `${title} (${page + 1}/${pages})`,
-          message: lines
-            .slice(page * pageHeight, (page + 1) * pageHeight)
-            .join("\n"),
-          label: {
-            confirm: page + 1 < pages ? "Next" : "Actions",
-            cancel: "Dismiss",
-          },
+          return end;
         });
-        ctx.ui.dialog.set({ size: "xlarge", centered: true });
-        if ((await shown) !== true) return false;
+        const first = Math.max(
+          0,
+          ends.findIndex((end) => end > cursor),
+        );
+        for (let page = first; page < pages.length;) {
+          if (disposed) return false;
+          let resized = false;
+          const resize = () => {
+            resized = true;
+            ctx.ui.dialog.clear();
+          };
+          const shown = ctx.ui.dialog.confirm({
+            title: `${title} (${page + 1}/${pages.length})`,
+            message: pages[page],
+            label: {
+              confirm: page + 1 < pages.length ? "Next" : "Actions",
+              cancel: page > 0 ? "Previous" : "Dismiss",
+            },
+          });
+          ctx.ui.dialog.set({ size: "xlarge", centered: true });
+          ctx.renderer.on("resize", resize);
+          let acknowledged;
+          try {
+            acknowledged = await shown;
+          } finally {
+            ctx.renderer.off("resize", resize);
+          }
+          if (resized) break;
+          if (acknowledged === false && page > 0) {
+            page--;
+            cursor = page === 0 ? 0 : ends[page - 1];
+            continue;
+          }
+          if (acknowledged !== true) return false;
+          cursor = ends[page];
+          page++;
+          if (page === pages.length) return true;
+        }
       }
-      return true;
+      return false;
     };
     const show = async (item: PendingApproval) => {
       showing = true;
@@ -85,22 +102,30 @@ export default Plugin.define({
               ...(item.grantEligible
                 ? [{ title: "Trust exact for session", value: "session" }]
                 : []),
-              { title: "Full details", value: "details" },
-              { title: "Technical details", value: "technical" },
+              { title: "Details", value: "details" },
+              { title: "Full command", value: "command" },
+              { title: "Diagnostics", value: "technical" },
             ],
           });
           ctx.ui.dialog.set({ size: "xlarge", centered: true });
           choice = await selected;
-          if (!["details", "technical"].includes(choice ?? "") || disposed)
+          if (
+            !["details", "command", "technical"].includes(choice ?? "") ||
+            disposed
+          )
             break;
           if (
             !(await readText(
-              choice === "technical"
-                ? "Technical details — may contain secrets"
-                : "Full details — may contain secrets",
-              choice === "technical"
-                ? approvalTechnicalDetails(item)
-                : approvalDetails(item),
+              choice === "command"
+                ? "Full command — may contain secrets"
+                : choice === "technical"
+                  ? "Diagnostics — may contain secrets"
+                  : "Details — may contain secrets",
+              choice === "command"
+                ? item.command
+                : choice === "technical"
+                  ? approvalTechnicalDetails(item)
+                  : approvalDetails(item),
             ))
           ) {
             choice = undefined;

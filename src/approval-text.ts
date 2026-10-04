@@ -96,6 +96,11 @@ export function riskAssessmentText(value: unknown): string {
   ].join("\n\n");
 }
 
+function commandPreview(item: PendingApproval): string {
+  const shortened = item.preview !== redactText(item.command);
+  return `Command preview${shortened ? " (shortened)" : ""}:\n${item.preview}`;
+}
+
 export function approvalSummary(item: PendingApproval): string {
   const { risks, uncertainties } = assessment(item);
   const highest = risks.reduce<Risk | undefined>((prior, risk) => {
@@ -107,21 +112,21 @@ export function approvalSummary(item: PendingApproval): string {
   }, undefined);
   return redactText(
     [
-      `Command:\n${item.preview}`,
       highest
         ? riskText(highest)
         : `Why approval is needed:\n${item.effectSummary}`,
       ...(risks.length > 1
         ? [
-            `${risks.length - 1} more ${risks.length === 2 ? "risk" : "risks"} — see Full details`,
+            `${risks.length - 1} more ${risks.length === 2 ? "risk" : "risks"} — see Details`,
           ]
         : []),
       ...(uncertainties.length
         ? [
-            `${uncertainties.length} ${uncertainties.length === 1 ? "uncertainty" : "uncertainties"} — see Full details`,
+            `${uncertainties.length} ${uncertainties.length === 1 ? "uncertainty" : "uncertainties"} — see Details`,
           ]
         : []),
       `Working directory:\n${item.cwd}`,
+      commandPreview(item),
     ].join("\n\n"),
   );
 }
@@ -129,8 +134,6 @@ export function approvalSummary(item: PendingApproval): string {
 export function approvalDetails(item: PendingApproval): string {
   const { risks, uncertainties } = assessment(item);
   return [
-    `Command:\n${item.command}`,
-    `Working directory:\n${item.cwd}`,
     ...(risks.length
       ? risks.map(
           (risk, index) =>
@@ -138,9 +141,41 @@ export function approvalDetails(item: PendingApproval): string {
         )
       : [`Why approval is needed:\n${item.effectSummary}`]),
     `Uncertainties:\n${uncertainties.length ? uncertainties.map((value) => `• ${value}`).join("\n") : "None reported"}`,
+    `Working directory:\n${item.cwd}`,
+    commandPreview(item),
   ].join("\n\n");
 }
 
 export function approvalTechnicalDetails(item: PendingApproval): string {
   return `Session: ${item.sessionID}\nCall: ${item.callID}\nFingerprint: ${item.fingerprint}\n\nRiskAssessment:\n${JSON.stringify(item.assessment, null, 2)}`;
+}
+
+export function approvalPages(
+  message: string,
+  width: number,
+  height: number,
+): string[] {
+  const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  const lines = message.split("\n").flatMap((line) => {
+    const wrapped: string[] = [];
+    let row = "";
+    let cells = 0;
+    for (const { segment } of graphemes.segment(line)) {
+      // shortcut: reserve two cells for non-ASCII graphemes until the host exposes a public width helper.
+      const size = segment === "\t" ? 8 : /^[\x20-\x7e]$/.test(segment) ? 1 : 2;
+      if (row && cells + size > width) {
+        wrapped.push(row);
+        row = "";
+        cells = 0;
+      }
+      row += segment;
+      cells += size;
+    }
+    wrapped.push(row);
+    return wrapped;
+  });
+  const pages: string[] = [];
+  for (let start = 0; start < lines.length; start += height)
+    pages.push(lines.slice(start, start + height).join("\n"));
+  return pages;
 }

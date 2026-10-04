@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { runLifecycleCases } from "./lifecycle-driver.mjs";
 import { createHash } from "node:crypto";
 import { preparePacked } from "./packed-release.mjs";
+import { longCommand } from "./long-command.mjs";
 import {
   runConcurrencyCases,
   runGrantRaceCases,
@@ -122,6 +123,18 @@ export async function runSeam(options = {}) {
         const uncertainties = readableDenial
           ? ["Backup availability is unknown", "Remote behavior is unknown"]
           : [];
+        if (text.includes("COMMAND_GATE_LONG_COMMAND")) {
+          risks.push({
+            ...risk,
+            category: "network",
+            severity: "low",
+            likelihood: "possible",
+            reversible: true,
+            affectsProtectedPaths: false,
+            evidence: "Secondary deterministic fixture risk",
+          });
+          uncertainties.push("Deterministic fixture uncertainty");
+        }
         response.writeHead(200, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
@@ -629,6 +642,14 @@ exec '${aar}' "$@"
           call: { tool: "shell", arguments: { command: "bash mutable.sh" } },
           script: `FIXTURE=fixture-ask printf 'once\\n' >> ${name}.marker\n`,
         }));
+      if (options.layout || options.longHuman)
+        cases = cases.map((scenario) => ({
+          ...scenario,
+          call: {
+            tool: "shell",
+            arguments: { command: longCommand(scenario.marker) },
+          },
+        }));
       if (options.layout) cases = cases.slice(0, 1);
       evidence.approval = await boot({
         name: "approval",
@@ -639,6 +660,8 @@ exec '${aar}' "$@"
         cases,
         human: options.human,
         layout: options.layout,
+        layoutDismiss: options.layoutDismiss,
+        longHuman: options.longHuman,
         tuiActions: options.tuiActions,
         pluginOptions: {
           approvalTimeoutMs: options.human ? 600000 : 2000,
@@ -1289,12 +1312,14 @@ async function bootHost(config) {
           .join(" ");
         await writeFile(
           `${root}/launch-tui.sh`,
-          `#!/bin/sh\ntrap ${quote(`touch ${quote(`${root}/human-tui.closed`)}`)} EXIT\nenv -i ${assignments} ${quote(opencode)} --server http://127.0.0.1:${port} --session ${quote(sessionID)} ${quote(directory)}\n`,
+          `#!/bin/sh\ntrap ${quote(`touch ${quote(`${root}/human-tui.closed`)}`)} EXIT\n${config.longHuman ? `stty size > ${quote(`${root}/human-terminal-size.txt`)}\n` : ""}env -i ${assignments} ${quote(opencode)} --server http://127.0.0.1:${port} --session ${quote(sessionID)} ${quote(directory)}\n`,
         );
         console.log(
           config.tuiActions || config.layout
             ? `Automated TUI fixture: ${root}/launch-tui.sh`
-            : `Human TUI: sh ${root}/launch-tui.sh; choose Allow once twice for human-once, Trust exact for session for human-session, then Deny for human-deny, and exit.`,
+            : config.longHuman
+              ? `Human long-command TUI: sh ${root}/launch-tui.sh; inspect Details and every Full command page, return using Actions (Escape dismisses the entire request), select Allow once on the FIRST request, then Deny on the SECOND request, and exit.`
+              : `Human TUI: sh ${root}/launch-tui.sh; choose Allow once twice for human-once, Trust exact for session for human-session, then Deny for human-deny, and exit.`,
         );
         if (config.tuiActions)
           layoutCapture = exec("python3", [
@@ -1307,6 +1332,7 @@ async function bootHost(config) {
             `${here}/tui-layout.py`,
             `${root}/launch-tui.sh`,
             `${root}/tui-layout.json`,
+            ...(config.layoutDismiss ? ["dismiss"] : []),
           ]);
         let connected = false;
         for (let index = 0; index < 6000; index++) {
@@ -1328,6 +1354,11 @@ async function bootHost(config) {
         await writeFile(
           `${directory}/${scenario.approval === "session" ? "trusted.sh" : scenario.approval === "script-deny" ? "denied-script.sh" : "mutable.sh"}`,
           scenario.script,
+        );
+      if (config.longHuman || config.layout)
+        await writeFile(
+          `${root}/${scenario.name}.command`,
+          scenario.call.arguments.command,
         );
       await api("POST", `/api/session/${sessionID}/prompt`, {
         text: `CASE ${scenario.name}`,
@@ -1552,6 +1583,7 @@ async function bootHost(config) {
       }
       results.push({
         name: scenario.name,
+        command: scenario.call?.arguments.command ?? null,
         ownedRunning,
         lateEffect,
         sessionID,
