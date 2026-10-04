@@ -7,7 +7,46 @@ test("defaults follow the carried V1 contract", () => {
   assert.equal(config.binaryPath, "aar");
   assert.deepEqual(config.tools, DEFAULT_TOOLS);
   assert.equal(config.timeoutMs, DEFAULT_TIMEOUT_MS);
+  assert.equal(config.approvalMode, "never-ask");
   assert.equal(config.configError, null);
+});
+
+test("approvalMode defaults to never-ask and accepts only its two explicit values", () => {
+  assert.equal(resolveConfig({}, {}).approvalMode, "never-ask");
+  for (const approvalMode of ["never-ask", "interactive", "Interactive"]) {
+    const config = resolveConfig({ approvalMode }, {});
+    assert.equal(config.configError, null, approvalMode);
+  }
+  assert.equal(
+    resolveConfig({ approvalMode: "never-ask" }, {}).approvalMode,
+    "never-ask",
+  );
+  assert.equal(
+    resolveConfig({ approvalMode: "interactive" }, {}).approvalMode,
+    "interactive",
+  );
+  for (const approvalMode of ["always", "", "never_ask"]) {
+    const config = resolveConfig({ approvalMode }, {});
+    assert.match(
+      String(config.configError),
+      /approvalMode must be never-ask or interactive/,
+      JSON.stringify(approvalMode),
+    );
+    assert.equal(
+      config.approvalMode,
+      "never-ask",
+      "invalid values fail closed to never-ask",
+    );
+  }
+  const withPassthrough = resolveConfig(
+    { approvalMode: "auto", onReviewerFailure: "passthrough" },
+    {},
+  );
+  assert.match(
+    String(withPassthrough.configError),
+    /approvalMode must be never-ask or interactive/,
+  );
+  assert.equal(withPassthrough.onReviewerFailure, "passthrough");
 });
 
 test("options take precedence over environment overrides", () => {

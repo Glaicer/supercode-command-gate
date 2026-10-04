@@ -18,6 +18,7 @@ test(
     });
     assert.equal(evidence.version, "2.0.22");
     assert.equal(evidence.approval.inventoryOK, true);
+    assert.equal(evidence.approval.status.settings.approvalMode, "interactive");
     assert.ok(evidence.approval.installation);
     const [once, denied] = evidence.approval.cases;
     assert.equal(once.sideEffect, "once\n");

@@ -9,7 +9,9 @@ test("target TUI exposes doctor health, missing Reviewer and explicit unreviewed
     assert.match(boot.diagnostics, /CommandGate—health/, boot.name);
     assert.match(boot.diagnostics, /binaryPath/, boot.name);
     assert.match(boot.diagnostics, /approvalAvailable/, boot.name);
+    assert.match(boot.diagnostics, /approvalMode/, boot.name);
     assert.equal(boot.status.settings.tools.length, 2);
+    assert.equal(boot.status.settings.approvalMode, "never-ask", boot.name);
     assert.equal(
       boot.inventory.filter((plugin) => plugin.id === "command-gate").length,
       1,
@@ -18,6 +20,7 @@ test("target TUI exposes doctor health, missing Reviewer and explicit unreviewed
   const [healthy, missing, passthrough, healthyPassthrough] =
     evidence.diagnostics;
   assert.equal(healthy.status.healthy, true);
+  assert.equal(healthy.status.settings.approvalMode, "never-ask");
   assert.equal(missing.status.healthy, false);
   assert.match(missing.diagnostics, /Commands.*remaindenied/);
   assert.equal(passthrough.status.failureMode, "passthrough");

@@ -8,6 +8,7 @@ import { resolveConfig } from "./config.ts";
 import {
   blockedMessage,
   errorMessage,
+  neverAskDenialMessage,
   reviewerDenialMessage,
   startupDiagnostic,
   unavailableReason,
@@ -341,6 +342,7 @@ export default Plugin.define({
                 tools: config.tools,
                 timeoutMs: config.timeoutMs,
                 approvalTimeoutMs: config.approvalTimeoutMs,
+                approvalMode: config.approvalMode,
                 commandRewriter: config.commandRewriter,
                 rewriterPath: config.rewriterPath,
               },
@@ -632,6 +634,21 @@ export default Plugin.define({
             return allow(request, decision);
           }
           if (decision.decision === "ask") {
+            if (config.approvalMode === "never-ask") {
+              release();
+              log("review-deny", {
+                ...evidence,
+                source: decision.source,
+                reason: decision.reason,
+                fingerprint,
+                approvalMode: "never-ask",
+                mappedFrom: "ask",
+              });
+              return {
+                kind: "deny",
+                message: neverAskDenialMessage(decision),
+              } satisfies ReviewOutcome;
+            }
             log("approval-ask", {
               ...evidence,
               source: decision.source,

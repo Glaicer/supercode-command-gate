@@ -31,6 +31,24 @@ export function reviewerDenialMessage(
   );
 }
 
+export const NEVER_ASK_EXPLANATION =
+  "Human approval is required by Reviewer policy, but prompts are disabled. The command was not executed.";
+
+export function neverAskDenialMessage(
+  decision: Pick<Decision, "reason" | "rule" | "assessment">,
+): string {
+  return redactText(
+    [
+      `Auto Approve Permissions blocked this command. Reason: ${compactReason(decision.reason)}.`,
+      ...(decision.rule ? [`Rule: ${decision.rule}`] : []),
+      riskAssessmentText(decision.assessment),
+      NEVER_ASK_EXPLANATION,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+  );
+}
+
 export function unavailableReason(detail: string): string {
   return `the Command Gate is unavailable (${compactReason(detail)})`;
 }

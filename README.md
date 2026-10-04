@@ -4,6 +4,24 @@ Native Bash review for OpenCode **2.0.22**, using the separate `aar` Command Rev
 
 ## Approval
 
+**Approval mode.** The server option `approvalMode` defaults to **`never-ask`**: every Reviewer `ask` is deterministically denied as a policy refusal — no pending request is created, no adapter is awaited and no dialog opens, with or without a connected TUI. The model-visible tool error carries the original Reviewer reason, the readable risks/uncertainties and the fixed explanation "Human approval is required by Reviewer policy, but prompts are disabled. The command was not executed." Ask-to-Deny is a policy refusal, never an operational failure: neither `onReviewerFailure: "passthrough"` nor a connected approval client can bypass it, and no severity threshold, implicit approval or automatic grant exists. The human approval flow described below is opt-in via the explicit `"approvalMode": "interactive"` server option — the mode for users who want **Allow once** or **Trust exact for session**:
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "@supercode/command-gate",
+      "options": {
+        "binaryPath": "/absolute/path/to/aar",
+        "approvalMode": "interactive",
+      },
+    },
+  ],
+}
+```
+
+Never-ask suppresses **Gate** approval prompts only. Native permission prompts and any other host/plugin prompts are separate mechanisms and stay exactly as configured.
+
 The server owns location/session/message/call-bound pending requests. The TUI receives them through public RPC, not a model-visible tool. Its paginated summary leads with the highest-severity risk and its evidence, remaining risk/uncertainty counts, and canonical working directory, followed by a masked command preview labelled **shortened** when truncated. Details presents every risk and uncertainty before the compact masked preview; it never puts the complete script ahead of the assessment. **Full command** separately displays the original unmasked command with its original line breaks and whitespace, wrapped into numbered pages for the terminal dimensions. Pipes, semicolons, quoted punctuation and embedded scripts are not split into different commands or reformatted. Non-ASCII graphemes stay intact, with a conservative two-cell width budget. Diagnostics holds identifiers, fingerprint and raw assessment JSON. All three expanded views warn that they may contain secrets. Actions are Deny, Allow once, eligible Trust exact for session, Details, Full command and Diagnostics. Reading pages or opening any view is **not** approval; dismissal refuses the call.
 
 Later pages show **Previous** to the left of Next/Actions. The first page retains Dismiss; Escape dismisses from any page, never navigates backward. Terminal resizing reflows the current page from the original source position without acknowledging it or skipping unread content.
@@ -49,8 +67,9 @@ Native `plugin add` also registers the bare package in global `cli.json`. Server
 | `commandRewriter` | `none` | `AAR_GATE_COMMAND_REWRITER` |
 | `rewriterPath` | `rtk` | `AAR_GATE_REWRITER_PATH` |
 | `onReviewerFailure` | `deny` | `AAR_GATE_ON_REVIEWER_FAILURE` |
+| `approvalMode` | `never-ask` | — |
 
-Explicit package options take precedence over environment overrides. `approvalTimeoutMs` is a server-only option, default `600000`. Invalid settings deny, including invalid settings combined with passthrough.
+Explicit package options take precedence over environment overrides. `approvalTimeoutMs` is a server-only option, default `600000`. There is no environment override for `approvalMode`; it accepts only `never-ask` and `interactive` (matched case-insensitively like the other enum options), and any other value is an invalid setting that denies — including invalid settings combined with passthrough.
 
 Use **Command Gate: health** in the palette, or `/gate-health`, for server doctor health/reason, failure mode, effective settings and approval-adapter availability. An active inventory item is only proof of loading, not successful review. Missing/incompatible Reviewer, explicit **UNREVIEWED** passthrough and unavailable approval adapter have separate diagnostics.
 
@@ -81,7 +100,7 @@ Reviewer reservation expiry still applies: a response arriving before the human 
 
 ## Failures and cancellation
 
-The default `onReviewerFailure: "deny"` keeps interception loaded when doctor is unhealthy or the binary is missing/incompatible. Invalid options always deny. Explicit `"passthrough"` permits operational Reviewer failures only, labelled **UNREVIEWED** in server diagnostics and a TUI warning fetched through public status RPC. Reviewer deny/ask, stale context, failed approval/grant, native deny, unsupported Bash/background invocation and invalid configuration never become passthrough.
+The default `onReviewerFailure: "deny"` keeps interception loaded when doctor is unhealthy or the binary is missing/incompatible. Invalid options always deny. Explicit `"passthrough"` permits operational Reviewer failures only, labelled **UNREVIEWED** in server diagnostics and a TUI warning fetched through public status RPC. Reviewer deny/ask (including never-ask Ask-to-Deny), stale context, failed approval/grant, native deny, unsupported Bash/background invocation and invalid configuration never become passthrough.
 
 Gate-owned Reviewer and RTK operations are deadline-bound. On cancellation/deadline, POSIX subprocess groups receive SIGKILL (including descendants); the Effect finalizer joins subprocess close before releasing review state. Native command execution and its supervision remain entirely with OpenCode. Unload interrupts the wrapped native Effect, including pre-spawn permission waits; any already-running native process is cancelled by host supervision, never by a Gate spawner. Pending human waits remove timers/abort listeners on every terminal response, and plugin unload closes them and signals outstanding reviews. Captured old tool wrappers refuse after unload instead of executing without their removed shell hook. Restart/reload still resets persisted trust before first review.
 

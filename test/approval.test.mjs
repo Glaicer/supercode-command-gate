@@ -10,6 +10,7 @@ before(async () => {
 test("Allow once resumes the same native call after a real reserved grant and fresh review", () => {
   const result = evidence.approval.cases[0];
   assert.equal(evidence.approval.inventoryOK, true);
+  assert.equal(evidence.approval.status.settings.approvalMode, "interactive");
   assert.equal(result.reply.accepted, true);
   assert.equal(result.modelCalls, 1);
   assert.equal(result.sideEffect, "once\n");
@@ -72,6 +73,11 @@ test("dismissal, bounded timeout, unavailable/disconnected clients and cancellat
   );
   for (const reply of Object.values(invalid.reply))
     assert.equal(reply.accepted, false);
+  const noClient = evidence.approval.cases.find(
+    (item) => item.name === "ask-no-client",
+  );
+  assert.match(noClient.toolResult, /requires human approval/i);
+  assert.match(noClient.toolResult, /command was not executed/i);
 });
 
 test("Allow once cannot authorize the next identical call or a duplicate reply", () => {

@@ -387,6 +387,7 @@ exec '${aar}' "$@"
         modelRequests,
         cases: [],
         grantRaces: cases,
+        pluginOptions: { approvalMode: "interactive" },
       });
       await writeFile(
         `${root}/results.json`,
@@ -419,7 +420,10 @@ exec '${aar}' "$@"
         modelRequests,
         cases: [],
         concurrency: cases,
-        pluginOptions: { approvalTimeoutMs: 10000 },
+        pluginOptions: {
+          approvalTimeoutMs: 10000,
+          approvalMode: "interactive",
+        },
       });
       await writeFile(
         `${root}/results.json`,
@@ -562,6 +566,7 @@ exec '${aar}' "$@"
         assessorRequests,
         cases: [],
         lifecycle: scenario,
+        pluginOptions: { approvalMode: "interactive" },
       });
       evidence.assessorRequests = assessorRequests;
       evidence.modelRequests = modelRequests;
@@ -665,6 +670,7 @@ exec '${aar}' "$@"
         tuiActions: options.tuiActions,
         pluginOptions: {
           approvalTimeoutMs: options.human ? 600000 : 2000,
+          approvalMode: "interactive",
           ...(options.passthrough ? { onReviewerFailure: "passthrough" } : {}),
         },
         rules: () => [
@@ -707,7 +713,10 @@ exec '${aar}' "$@"
           binaryPath: await writeDenialFixture(`${root}/denial-failure`, aar),
           modelRequests,
           cases,
-          pluginOptions: { approvalTimeoutMs: 2000 },
+          pluginOptions: {
+            approvalTimeoutMs: 2000,
+            approvalMode: "interactive",
+          },
         });
       }
       evidence.assessorRequests = assessorRequests;
@@ -716,6 +725,38 @@ exec '${aar}' "$@"
         JSON.stringify(evidence, null, 2),
       );
       console.log(`Approval evidence: ${root}/results.json`);
+      return evidence;
+    }
+    if (options.neverAsk) {
+      cases = ["never-ask-adapter", "never-ask-no-adapter"].map((name) => ({
+        name,
+        call: {
+          tool: "shell",
+          arguments: {
+            command: `FIXTURE=fixture-ask sh -c 'echo once >> ${name}-denied.marker'`,
+          },
+        },
+        marker: `${name}-denied.marker`,
+        adapter: name === "never-ask-adapter",
+        watchPending: true,
+        repeat: 2,
+      }));
+      evidence.neverAsk = await boot({
+        name: "never-ask",
+        root: `${root}/never-ask`,
+        baseURL,
+        aar,
+        modelRequests,
+        cases,
+        adapterControl: true,
+        pluginOptions: { onReviewerFailure: "passthrough" },
+      });
+      evidence.assessorRequests = assessorRequests;
+      await writeFile(
+        `${root}/results.json`,
+        JSON.stringify(evidence, null, 2),
+      );
+      console.log(`Never-ask evidence: ${root}/results.json`);
       return evidence;
     }
     cases = mainCases(`${root}/main`);
@@ -1350,6 +1391,9 @@ async function bootHost(config) {
       if (config.name === "approval" && !config.human) {
         await rpc(scenario.approval ? "connect" : "disconnect", { clientID });
       }
+      if (config.adapterControl) {
+        await rpc(scenario.adapter ? "connect" : "disconnect", { clientID });
+      }
       if (scenario.script)
         await writeFile(
           `${directory}/${scenario.approval === "session" ? "trusted.sh" : scenario.approval === "script-deny" ? "denied-script.sh" : "mutable.sh"}`,
@@ -1360,6 +1404,16 @@ async function bootHost(config) {
           `${root}/${scenario.name}.command`,
           scenario.call.arguments.command,
         );
+      let maxPending = 0;
+      const pendingWatch = scenario.watchPending
+        ? setInterval(() => {
+            rpc("list", { clientID, sessionID })
+              .then((listed) => {
+                maxPending = Math.max(maxPending, listed.length);
+              })
+              .catch(() => {});
+          }, 25)
+        : null;
       await api("POST", `/api/session/${sessionID}/prompt`, {
         text: `CASE ${scenario.name}`,
       });
@@ -1552,9 +1606,11 @@ async function bootHost(config) {
           scenario.name === "fixture-timeout" ? 30000 : 20000,
         );
       }
-      const remaining = scenario.approval
-        ? await rpc("list", { clientID, sessionID })
-        : [];
+      if (pendingWatch) clearInterval(pendingWatch);
+      const remaining =
+        scenario.approval || scenario.watchPending
+          ? await rpc("list", { clientID, sessionID })
+          : [];
       const context = await api("GET", `/api/session/${sessionID}/context`);
       const calls = config.modelRequests.filter(
         (item) => item.name === scenario.name,
@@ -1590,6 +1646,7 @@ async function bootHost(config) {
         pending,
         reply,
         remaining,
+        maxPending: scenario.watchPending ? maxPending : null,
         sideEffect: marker ? await readFile(markerPath, "utf8") : null,
         marker,
         markerContent:

@@ -5,6 +5,8 @@ import {
   blockedMessage,
   compactReason,
   errorMessage,
+  NEVER_ASK_EXPLANATION,
+  neverAskDenialMessage,
   startupDiagnostic,
   unavailableReason,
   reviewerDenialMessage,
@@ -153,4 +155,45 @@ test("Reviewer unavailable remains an operational diagnostic without assessed ri
   assert.match(message, /Assessor unavailable: token=\[REDACTED\]/);
   assert.match(message, /The command was not executed\.$/);
   assert.doesNotMatch(message, /demo-secret|Risk:|Uncertainties:/);
+});
+
+test("never-ask denial keeps the Reviewer evidence and explains disabled prompts", () => {
+  const message = neverAskDenialMessage({
+    reason: "The command may destroy data token=demo-secret",
+    rule: null,
+    assessment: {
+      risks: [
+        {
+          category: "critical_data_loss",
+          severity: "high",
+          likelihood: "possible",
+          reversible: false,
+          affectsProtectedPaths: true,
+          evidence: "The target may contain the only copy",
+        },
+      ],
+      uncertainties: ["Backup availability is unknown"],
+    },
+  });
+  assert.match(
+    message,
+    /Reason: The command may destroy data token=\[REDACTED\]/,
+  );
+  assert.match(message, /Risk 1 of 1\nRisk: Critical data loss/);
+  assert.match(message, /The target may contain the only copy/);
+  assert.match(message, /• Backup availability is unknown/);
+  assert.ok(message.endsWith(NEVER_ASK_EXPLANATION));
+  assert.doesNotMatch(message, /demo-secret|request_command_approval/);
+});
+
+test("never-ask denial without assessment still states the policy refusal", () => {
+  const message = neverAskDenialMessage({
+    reason: "Insufficient evidence",
+    rule: "protected-write",
+    assessment: null,
+  });
+  assert.match(message, /Reason: Insufficient evidence/);
+  assert.match(message, /Rule: protected-write/);
+  assert.ok(message.endsWith(NEVER_ASK_EXPLANATION));
+  assert.doesNotMatch(message, /Risk:|None reported|safe/);
 });

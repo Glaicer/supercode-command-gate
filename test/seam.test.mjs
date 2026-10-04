@@ -50,6 +50,7 @@ test("public health distinguishes Reviewer failure and absent approval adapter a
     tools: ["bash", "shell"],
     timeoutMs: 5500,
     approvalTimeoutMs: 600000,
+    approvalMode: "never-ask",
     commandRewriter: "none",
     rewriterPath: "rtk",
   });
@@ -61,6 +62,7 @@ test("public health distinguishes Reviewer failure and absent approval adapter a
 });
 
 test("real auto-allow and assessor allow run exactly one native invocation", () => {
+  assert.equal(evidence.main.status.settings.approvalMode, "never-ask");
   const autoAllow = find(evidence.main, "auto-allow");
   assert.equal(autoAllow.modelCalls, 1);
   assert.equal(autoAllow.toolResult.trim(), evidence.main.project);
@@ -90,6 +92,7 @@ test("real auto-allow and assessor allow run exactly one native invocation", () 
 });
 
 test("assessor deny and hard deny stop before process start and the session continues", () => {
+  assert.equal(evidence.main.status.settings.approvalMode, "never-ask");
   const denied = find(evidence.main, "assessor-deny");
   assert.equal(denied.marker, false, "the denied marker must stay absent");
   assert.match(denied.toolResult, /command was not executed/i);
@@ -143,10 +146,15 @@ test("compound programs and scanner-empty commands are reviewed verbatim", () =>
   const compound = find(evidence.main, "compound");
   assert.equal(compound.marker, false);
   assert.equal(compound.finished, true);
-  assert.match(compound.toolResult, /requires human approval/i);
-  const compoundReview = reviewOf(compound, "approval-ask");
+  assert.match(
+    compound.toolResult,
+    /Human approval is required by Reviewer policy, but prompts are disabled\./,
+  );
+  const compoundReview = reviewOf(compound, "review-deny");
+  assert.equal(compoundReview.mappedFrom, "ask");
   assert.equal(compoundReview.command, COMPOUND_COMMAND);
   assert.match(compoundReview.reason, /uncertainty/i);
+
   assert.ok(
     evidence.main.auditRecords.some(
       (record) =>
@@ -203,13 +211,32 @@ test("reviewed cwd and env facts match the actual invocation without forwarding 
   assert.ok(goalReview.intentId.length > 0);
 });
 
-test("Reviewer ask refuses safely without a working approval client", () => {
+test("default never-ask maps Reviewer ask to an immediate policy denial without approval state", () => {
   const ask = find(evidence.main, "ask-refusal");
   assert.equal(ask.marker, false);
-  assert.match(ask.toolResult, /requires human approval/i);
-  assert.match(ask.toolResult, /command was not executed/i);
+  const message = JSON.parse(ask.toolResult).error.message;
+  assert.match(message, /command was not executed/i);
+  assert.match(
+    message,
+    /Human approval is required by Reviewer policy, but prompts are disabled\./,
+  );
+  assert.match(message, /Risk: Critical data loss/);
+  assert.match(
+    message,
+    /Evidence:\nDeterministic fake assessment for the Command Gate seam/,
+  );
   assert.equal(ask.finished, true);
-  assert.equal(reviewOf(ask, "approval-ask").source, "assessor");
+  assert.equal(ask.maxPending ?? 0, 0);
+  assert.equal(ask.remaining.length, 0);
+  assert.equal(
+    ask.events.filter((event) => event.kind === "approval-ask").length,
+    0,
+  );
+  const denial = ask.events.find(
+    (event) => event.kind === "review-deny" && event.mappedFrom === "ask",
+  );
+  assert.ok(denial, "the ask is logged as a mapped policy denial");
+  assert.equal(denial.source, "assessor");
 });
 
 test("background and non-Bash invocations refuse explicitly", () => {
