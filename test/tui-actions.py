@@ -80,7 +80,7 @@ try:
             )
             submitted = True
             view = b""
-        elif b"CommandGate" in compact and b"summary" in compact:
+        elif b"CommandGate" in compact and b"commandneedsapproval" in compact:
             os.write(master, b"\r")
             view = b""
         last_key = time.monotonic()
