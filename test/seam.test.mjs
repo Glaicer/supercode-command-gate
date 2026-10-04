@@ -96,6 +96,22 @@ test("assessor deny and hard deny stop before process start and the session cont
   assert.equal(denied.finished, true);
   const review = reviewOf(denied, "review-deny");
   assert.equal(review.source, "assessor");
+  const message = JSON.parse(denied.toolResult).error.message;
+  assert.ok(message.includes(review.reason));
+  assert.match(message, /Risk 1 of 2\nRisk: Critical data loss/);
+  assert.match(message, /Severity: Critical · Likelihood: Certain/);
+  assert.match(message, /Reversible: No · Protected paths affected: Yes/);
+  assert.match(
+    message,
+    /Evidence:\nDeterministic fake assessment for the Command Gate seam/,
+  );
+  assert.match(message, /Risk 2 of 2\nRisk: Network access/);
+  assert.match(message, /The command may contact a remote service/);
+  assert.match(
+    message,
+    /• Backup availability is unknown\n• Remote behavior is unknown/,
+  );
+  assert.doesNotMatch(message, /"risks"|"env"/);
   assert.equal(
     review.command,
     "export PROOF_SUB=$(printf side-effect > denied.marker); printf '%s' fixture-deny",
@@ -106,6 +122,15 @@ test("assessor deny and hard deny stop before process start and the session cont
   assert.match(hard.toolResult, /command was not executed/i);
   assert.equal(hard.finished, true);
   assert.equal(reviewOf(hard, "review-deny").source, "hard-deny");
+  const hardAudit = evidence.main.auditRecords.find(
+    (record) =>
+      record.command === "printf x > /etc" && record.decision === "deny",
+  );
+  assert.ok(hardAudit?.rule);
+  const hardMessage = JSON.parse(hard.toolResult).error.message;
+  assert.ok(hardMessage.includes(`Rule: ${hardAudit.rule}`));
+  assert.ok(hardMessage.includes(reviewOf(hard, "review-deny").reason));
+  assert.doesNotMatch(hardMessage, /Risk:|Uncertainties:|Reversible:/);
   assert.equal(
     evidence.assessorRequests.filter((text) => text.includes("printf x > /etc"))
       .length,
@@ -257,6 +282,12 @@ test("operational Reviewer failures deny by default without dropping the interce
     assert.equal(result.marker, false, name);
     assert.match(result.toolResult, /command was not executed/i, name);
     assert.match(result.toolResult, pattern, name);
+    assert.match(result.toolResult, /Command Gate is unavailable/i, name);
+    assert.doesNotMatch(
+      result.toolResult,
+      /Risk:|Uncertainties:|Reversible:/,
+      name,
+    );
     assert.equal(result.finished, true, name);
     assert.ok(
       result.events.some((item) => item.kind === "review-deny"),

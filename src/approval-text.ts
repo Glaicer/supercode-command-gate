@@ -48,7 +48,7 @@ function yesNo(value: unknown): string {
   return value === true ? "Yes" : value === false ? "No" : "Unknown";
 }
 
-function assessment(item: PendingApproval): {
+function assessment(item: Pick<PendingApproval, "assessment">): {
   risks: Risk[];
   uncertainties: string[];
 } {
@@ -79,6 +79,21 @@ function riskText(risk: Risk): string {
     `Reversible: ${yesNo(risk.reversible)} · Protected paths affected: ${yesNo(risk.affectsProtectedPaths)}`,
     `Evidence:\n${typeof risk.evidence === "string" && risk.evidence ? risk.evidence : "Not supplied"}`,
   ].join("\n");
+}
+
+export function riskAssessmentText(value: unknown): string {
+  const { risks, uncertainties } = assessment({ assessment: value });
+  return [
+    ...risks.map(
+      (risk, index) =>
+        `Risk ${index + 1} of ${risks.length}\n${riskText(risk)}`,
+    ),
+    ...(uncertainties.length
+      ? [
+          `Uncertainties:\n${uncertainties.map((value) => `• ${value}`).join("\n")}`,
+        ]
+      : []),
+  ].join("\n\n");
 }
 
 export function approvalSummary(item: PendingApproval): string {

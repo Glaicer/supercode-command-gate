@@ -108,13 +108,27 @@ export async function runSeam(options = {}) {
             : text.includes("fixture-ask")
               ? [{ ...risk, likelihood: "possible", reversible: true }]
               : [];
+        const readableDenial = text.includes("denied.marker");
+        if (readableDenial)
+          risks.push({
+            ...risk,
+            category: "network",
+            severity: "low",
+            likelihood: "possible",
+            reversible: true,
+            affectsProtectedPaths: false,
+            evidence: "The command may contact a remote service",
+          });
+        const uncertainties = readableDenial
+          ? ["Backup availability is unknown", "Remote behavior is unknown"]
+          : [];
         response.writeHead(200, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
             choices: [
               {
                 message: {
-                  content: JSON.stringify({ risks, uncertainties: [] }),
+                  content: JSON.stringify({ risks, uncertainties }),
                 },
               },
             ],

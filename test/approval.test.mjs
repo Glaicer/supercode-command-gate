@@ -119,6 +119,14 @@ test("changed scripts, intent and Goal cannot execute using the old human respon
   );
   assert.equal(denied.source, "assessor");
   assert.equal(denied.decision, "deny");
+  const message = JSON.parse(scriptDenied.toolResult).error.message;
+  assert.match(message, /Risk: Critical data loss/);
+  assert.match(
+    message,
+    /Evidence:\nDeterministic fake assessment for the Command Gate seam/,
+  );
+  assert.match(message, /The command was not executed\.$/);
+  assert.equal(scriptDenied.finished, true);
   const script = evidence.approval.cases.find(
     (item) => item.name === "ask-script",
   );

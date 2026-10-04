@@ -7,6 +7,7 @@ import {
   errorMessage,
   startupDiagnostic,
   unavailableReason,
+  reviewerDenialMessage,
 } from "./messages.ts";
 
 test("denial messages state the reason and the non-execution explicitly", () => {
@@ -41,4 +42,115 @@ test("startup diagnostic is loud and actionable", () => {
   assert.match(message, /Command Gate is unavailable: missing binary/);
   assert.match(message, /aar doctor/);
   assert.match(message, /Bash commands remain denied/);
+});
+
+test("Reviewer denial includes every risk and uncertainty without request data", () => {
+  const message = reviewerDenialMessage({
+    reason: "Protected data could be lost",
+    source: "assessor",
+    rule: null,
+    assessment: {
+      risks: [
+        {
+          category: "critical_data_loss",
+          severity: "critical",
+          likelihood: "possible",
+          reversible: false,
+          affectsProtectedPaths: true,
+          evidence:
+            "The target may contain the only copy; recovery is not established",
+        },
+        {
+          category: "network",
+          severity: "low",
+          likelihood: "unlikely",
+          reversible: true,
+          affectsProtectedPaths: false,
+          evidence:
+            "A request could send token=demo-secret to https://user:demo-password@example.test",
+        },
+      ],
+      uncertainties: [
+        "The backup has not been verified",
+        "Remote behavior is unknown",
+      ],
+    },
+  });
+  assert.match(message, /Reason: Protected data could be lost/);
+  assert.match(message, /Risk 1 of 2\nRisk: Critical data loss/);
+  assert.match(message, /Severity: Critical · Likelihood: Possible/);
+  assert.match(message, /Reversible: No · Protected paths affected: Yes/);
+  assert.match(
+    message,
+    /The target may contain the only copy; recovery is not established/,
+  );
+  assert.match(message, /Risk 2 of 2\nRisk: Network access/);
+  assert.match(message, /Severity: Low · Likelihood: Unlikely/);
+  assert.match(message, /Reversible: Yes · Protected paths affected: No/);
+  assert.match(message, /A request could send token=\[REDACTED\]/);
+  assert.match(
+    message,
+    /• The backup has not been verified\n• Remote behavior is unknown/,
+  );
+  assert.match(message, /The command was not executed\.$/);
+  assert.doesNotMatch(
+    message,
+    /demo-secret|demo-password|"risks"|Command:|Working directory:/,
+  );
+});
+
+test("missing assessment and fields never imply safety", () => {
+  for (const assessment of [null, undefined, {}, { risks: [] }]) {
+    const message = reviewerDenialMessage({
+      reason: "Insufficient evidence",
+      source: "assessor",
+      rule: null,
+      assessment,
+    });
+    assert.match(message, /Reason: Insufficient evidence/);
+    assert.match(message, /The command was not executed\.$/);
+    assert.doesNotMatch(message, /Risk:|None reported|safe|Reversible: Yes/);
+  }
+  const message = reviewerDenialMessage({
+    reason: "Evidence incomplete",
+    source: "assessor",
+    rule: null,
+    assessment: {
+      risks: [{ category: "network" }],
+      uncertainties: ["Destination unknown"],
+    },
+  });
+  assert.match(message, /Severity: Unknown · Likelihood: Unknown/);
+  assert.match(
+    message,
+    /Reversible: Unknown · Protected paths affected: Unknown/,
+  );
+  assert.match(message, /Evidence:\nNot supplied/);
+  assert.match(message, /• Destination unknown/);
+});
+
+test("Hard Deny includes the rule and reason without inventing assessment", () => {
+  const message = reviewerDenialMessage({
+    reason: "Protected path write",
+    source: "hard-deny",
+    rule: "protected-write",
+    assessment: null,
+  });
+  assert.match(message, /Reason: Protected path write/);
+  assert.match(message, /Rule: protected-write/);
+  assert.match(message, /The command was not executed\.$/);
+  assert.doesNotMatch(message, /Risk:|Uncertainties:|Reversible:/);
+});
+
+test("Reviewer unavailable remains an operational diagnostic without assessed risks", () => {
+  const message = reviewerDenialMessage({
+    reason: "Assessor unavailable: token=demo-secret",
+    source: "unavailable",
+    rule: null,
+    assessment: null,
+  });
+  assert.match(message, /Command Gate is unavailable/);
+  assert.match(message, /Assessor unavailable: token=\[REDACTED\]/);
+  assert.match(message, /The command was not executed\.$/);
+  assert.doesNotMatch(message, /demo-secret|Risk:|Uncertainties:/);
 });

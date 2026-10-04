@@ -8,6 +8,7 @@ import { resolveConfig } from "./config.ts";
 import {
   blockedMessage,
   errorMessage,
+  reviewerDenialMessage,
   startupDiagnostic,
   unavailableReason,
 } from "./messages.ts";
@@ -744,6 +745,11 @@ export default Plugin.define({
               reviewed.grantScope !== response.value ||
               reviewed.requestFingerprint !== decision.requestFingerprint
             ) {
+              if (reconciled.ok && reviewed?.decision === "deny")
+                return {
+                  kind: "deny",
+                  message: reviewerDenialMessage(reviewed),
+                } satisfies ReviewOutcome;
               return deny(
                 !reconciled.ok
                   ? reconciled.reason
@@ -762,7 +768,10 @@ export default Plugin.define({
             fingerprint,
             reason: decision.reason,
           });
-          return deny(decision.reason || "the command was not proven safe");
+          return {
+            kind: "deny",
+            message: reviewerDenialMessage(decision),
+          } satisfies ReviewOutcome;
         }).pipe(
           Effect.scoped,
           Effect.catchDefect((defect) =>

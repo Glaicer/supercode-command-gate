@@ -1,3 +1,6 @@
+import { redactText, riskAssessmentText } from "./approval-text.ts";
+import type { Decision } from "./reviewer.ts";
+
 export function compactReason(reason: unknown): string {
   return String(reason).replace(/\s+/g, " ").trim();
 }
@@ -9,6 +12,23 @@ export function errorMessage(error: unknown): string {
 
 export function blockedMessage(reason: string): string {
   return `Auto Approve Permissions blocked this command. Reason: ${compactReason(reason)}. The command was not executed.`;
+}
+
+export function reviewerDenialMessage(
+  decision: Pick<Decision, "reason" | "source" | "rule" | "assessment">,
+): string {
+  if (decision.source === "unavailable")
+    return redactText(blockedMessage(unavailableReason(decision.reason)));
+  return redactText(
+    [
+      `Auto Approve Permissions blocked this command. Reason: ${compactReason(decision.reason)}.`,
+      ...(decision.rule ? [`Rule: ${decision.rule}`] : []),
+      riskAssessmentText(decision.assessment),
+      "The command was not executed.",
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+  );
 }
 
 export function unavailableReason(detail: string): string {
