@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   MATERIAL_ENV_KEYS,
+  assistantRationaleFor,
   buildRequest,
   canonicalDirectory,
   materialEnvSubset,
@@ -21,6 +22,64 @@ test("the material env subset keeps only the carried keys and never the full env
   assert.deepEqual(subset, { CDPATH: "/cd", HOME: "/home/user", PWD: "/work" });
   assert.deepEqual(Object.keys(subset).sort(), [...MATERIAL_ENV_KEYS].sort());
   assert.equal("SECRET_TOKEN" in subset, false);
+});
+
+test("assistant rationale comes only from content before the owning tool call", () => {
+  const messages = [
+    {
+      id: "other",
+      type: "assistant",
+      content: [{ type: "reasoning", text: "unrelated reasoning" }],
+    },
+    {
+      id: "owning",
+      type: "assistant",
+      content: [
+        { type: "reasoning", text: "This is a disposable clone I created." },
+        { type: "text", text: "Removing the temporary clone." },
+        { type: "tool", id: "call_1", text: "tool output must not cross" },
+        { type: "reasoning", text: "later reasoning must not cross" },
+      ],
+    },
+  ];
+  const rationale = assistantRationaleFor(messages, "owning", "call_1");
+  assert.equal(
+    rationale,
+    "This is a disposable clone I created.\nRemoving the temporary clone.",
+  );
+  assert.equal(assistantRationaleFor(messages, "other", "call_1"), null);
+  assert.equal(assistantRationaleFor(messages, "owning", "missing"), null);
+  const request = buildRequest(
+    { command: "rm ./clone", cwd: process.cwd(), env: {} },
+    {
+      sessionID: "ses_1",
+      intentId: "msg_1",
+      goal: null,
+      latestUserRequest: null,
+      assistantRationale: rationale,
+    },
+    null,
+  );
+  assert.equal(request.intent.assistantRationale, rationale);
+});
+
+test("assistant rationale retains a bounded suffix nearest the call", () => {
+  const rationale = assistantRationaleFor(
+    [
+      {
+        id: "owning",
+        type: "assistant",
+        content: [
+          { type: "reasoning", text: "x".repeat(9000) + "immediate reason" },
+          { type: "tool", id: "call_1" },
+        ],
+      },
+    ],
+    "owning",
+    "call_1",
+  );
+  assert.equal(rationale?.length, 8192);
+  assert.ok(rationale?.endsWith("immediate reason"));
 });
 
 test("undefined values are dropped instead of sent as empty strings", () => {

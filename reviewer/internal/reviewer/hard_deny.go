@@ -11,7 +11,7 @@ import (
 
 // CatastrophicCatalogVersion identifies the closed, built-in hard-deny catalog.
 // It is deliberately not configurable: changing it is a policy change.
-const CatastrophicCatalogVersion = "catastrophic-v1"
+const CatastrophicCatalogVersion = "catastrophic-v2"
 
 func hardDenyEffect(rule string) string {
 	switch rule {
@@ -1209,6 +1209,11 @@ func isWholeTreeCatalogPath(pathValue string, platform catastrophicPlatform, req
 	pathValue = normalizeCatalogPath(pathValue, platform)
 	if platform == platformWindows {
 		return isWindowsWholeTreePath(pathValue, request)
+	}
+	if home := request.Env["HOME"]; filepath.IsAbs(home) {
+		if resolved, ok := resolveExistingPrefix(home); ok && pathValue == normalizeCatalogPath(resolved, platform) {
+			return true
+		}
 	}
 	roots := linuxWholeTreeRoots
 	if platform == platformDarwin {

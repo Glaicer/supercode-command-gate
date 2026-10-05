@@ -13,7 +13,11 @@ import {
   startupDiagnostic,
   unavailableReason,
 } from "./messages.ts";
-import { buildRequest, type Request } from "./request.ts";
+import {
+  assistantRationaleFor,
+  buildRequest,
+  type Request,
+} from "./request.ts";
 import {
   callAction,
   callCheck,
@@ -262,7 +266,7 @@ export default Plugin.define({
           yield* invalidate(sessionID, "new-intent");
           state.admit(sessionID, messageID, text);
         });
-      const contextFor = (sessionID: string) =>
+      const contextFor = (sessionID: string, call?: CallIdentity) =>
         Effect.gen(function* () {
           const clientEpoch = clientGeneration;
           const lineage: {
@@ -274,6 +278,7 @@ export default Plugin.define({
           let id: string | undefined = sessionID;
           let intent: Intent | undefined;
           let goal: string | null = null;
+          let assistantRationale: string | null = null;
           while (id) {
             if (lineage.some((entry) => entry.id === id))
               throw new Error("cyclic session parent relationship");
@@ -290,6 +295,12 @@ export default Plugin.define({
             const messages = yield* ctx.session.context({
               sessionID: id,
             } as Parameters<typeof ctx.session.context>[0]);
+            if (call && id === sessionID)
+              assistantRationale = assistantRationaleFor(
+                messages,
+                call.messageID,
+                call.callID,
+              );
             if ((epochs.get(id) ?? 0) !== epoch)
               throw new Error("intent changed during reconciliation");
             const latest = messages.findLast(
@@ -325,7 +336,7 @@ export default Plugin.define({
           const generation = createHash("sha256")
             .update(JSON.stringify({ lineage, clientEpoch }))
             .digest("hex");
-          return { intent, goal, generation };
+          return { intent, goal, generation, assistantRationale };
         });
       const registration = yield* ctx.rpc
         .register(Approvals, {
@@ -490,14 +501,16 @@ export default Plugin.define({
             );
           }
           const release = () => state.release(call);
-          const initialContext = yield* attempt(contextFor(call.sessionID));
+          const initialContext = yield* attempt(
+            contextFor(call.sessionID, call),
+          );
           if (!initialContext.ok) {
             release();
             return deny(
               `the owning session could not be reconciled (${initialContext.reason})`,
             );
           }
-          const { intent, goal } = initialContext.value;
+          const { intent, goal, assistantRationale } = initialContext.value;
           let request: Request;
           try {
             request = buildRequest(
@@ -511,6 +524,7 @@ export default Plugin.define({
                 intentId: intent?.id ?? null,
                 goal,
                 latestUserRequest: intent?.text ?? null,
+                assistantRationale,
               },
               ctx.location.directory,
             );
@@ -565,14 +579,18 @@ export default Plugin.define({
           if (!startup.ok) {
             return operationalFailure(startup.reason);
           }
-          const currentContext = yield* attempt(contextFor(call.sessionID));
+          const currentContext = yield* attempt(
+            contextFor(call.sessionID, call),
+          );
           if (!currentContext.ok)
             return deny("approval context could not be reconciled");
           const generation = currentContext.value.generation;
           if (
             (currentContext.value.intent?.id ?? "") !==
               request.session.intentId ||
-            currentContext.value.goal !== request.intent.goal
+            currentContext.value.goal !== request.intent.goal ||
+            (currentContext.value.assistantRationale ?? "") !==
+              (request.intent.assistantRationale ?? "")
           )
             return deny("intent changed before review");
           if (deniedResponses.get(call.sessionID)?.generation !== generation)
@@ -595,10 +613,14 @@ export default Plugin.define({
           const checked = yield* attemptPromise((signal) =>
             callCheck(config.binaryPath, request, config.timeoutMs, signal),
           );
-          const reconciledContext = yield* attempt(contextFor(call.sessionID));
+          const reconciledContext = yield* attempt(
+            contextFor(call.sessionID, call),
+          );
           if (
             !reconciledContext.ok ||
-            reconciledContext.value.generation !== generation
+            reconciledContext.value.generation !== generation ||
+            (reconciledContext.value.assistantRationale ?? "") !==
+              (request.intent.assistantRationale ?? "")
           )
             return deny("intent changed during review");
           if (!checked.ok) return operationalFailure(checked.reason);
@@ -689,7 +711,7 @@ export default Plugin.define({
             }
             const reconcile = () =>
               Effect.gen(function* () {
-                const current = yield* contextFor(call.sessionID);
+                const current = yield* contextFor(call.sessionID, call);
                 const fresh = buildRequest(
                   invocation,
                   {
@@ -697,6 +719,7 @@ export default Plugin.define({
                     intentId: current.intent?.id ?? null,
                     goal: current.goal,
                     latestUserRequest: current.intent?.text ?? null,
+                    assistantRationale: current.assistantRationale,
                   },
                   ctx.location.directory,
                 );
@@ -915,6 +938,7 @@ export default Plugin.define({
               intentId: outcome.request.session.intentId,
               goal: outcome.request.intent.goal,
               latestUserRequest: outcome.request.intent.latestUserRequest,
+              assistantRationale: outcome.request.intent.assistantRationale,
             },
             ctx.location.directory,
           );

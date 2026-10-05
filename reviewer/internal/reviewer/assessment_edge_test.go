@@ -6,12 +6,12 @@ import (
 	"github.com/supercode/auto-approval-reviewer/internal/reviewer"
 )
 
-func TestLocalEvidenceUncertaintyForcesAsk(t *testing.T) {
+func TestStrictLocalEvidenceUncertaintyForcesAsk(t *testing.T) {
 	request := assessorRequest(t, `cat "$TARGET"`)
 	fake := &fakeModelCall{responses: []string{`{"risks":[],"uncertainties":[]}`}}
 	decision, err := reviewer.Check(request, reviewer.Options{
 		StateDir:  t.TempDir(),
-		Config:    &reviewer.Config{Assessor: reviewer.AssessorConfig{Model: "primary", OnUnavailable: "deny"}},
+		Config:    &reviewer.Config{Assessor: reviewer.AssessorConfig{Model: "primary", OnUnavailable: "deny"}, Policy: reviewer.PolicyConfig{Profile: "strict"}},
 		ModelCall: fake,
 	})
 	if err != nil {
@@ -25,12 +25,12 @@ func TestLocalEvidenceUncertaintyForcesAsk(t *testing.T) {
 	}
 }
 
-func TestInterpreterWithoutScriptEvidenceForcesAsk(t *testing.T) {
+func TestStrictInterpreterWithoutScriptEvidenceForcesAsk(t *testing.T) {
 	request := assessorRequest(t, "python3 script.py")
 	fake := &fakeModelCall{responses: []string{`{"risks":[],"uncertainties":[]}`}}
 	decision, err := reviewer.Check(request, reviewer.Options{
 		StateDir:  t.TempDir(),
-		Config:    &reviewer.Config{Assessor: reviewer.AssessorConfig{Model: "primary", OnUnavailable: "deny"}},
+		Config:    &reviewer.Config{Assessor: reviewer.AssessorConfig{Model: "primary", OnUnavailable: "deny"}, Policy: reviewer.PolicyConfig{Profile: "strict"}},
 		ModelCall: fake,
 	})
 	if err != nil {

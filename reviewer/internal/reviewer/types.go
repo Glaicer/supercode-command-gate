@@ -20,9 +20,10 @@ type Session struct {
 }
 
 type Intent struct {
-	Goal              string `json:"goal"`
-	LatestUserRequest string `json:"latestUserRequest"`
-	Purpose           string `json:"purpose"`
+	Goal               string `json:"goal"`
+	LatestUserRequest  string `json:"latestUserRequest"`
+	Purpose            string `json:"purpose"`
+	AssistantRationale string `json:"assistantRationale,omitempty"`
 }
 
 type Options struct {
@@ -109,12 +110,18 @@ type RiskAssessment struct {
 }
 
 type Risk struct {
-	Category              string `json:"category"`
-	Likelihood            string `json:"likelihood"`
-	Severity              string `json:"severity"`
-	Reversible            bool   `json:"reversible"`
-	AffectsProtectedPaths bool   `json:"affectsProtectedPaths"`
-	Evidence              string `json:"evidence"`
+	Category              string            `json:"category"`
+	Likelihood            string            `json:"likelihood"`
+	Severity              string            `json:"severity"`
+	Reversible            bool              `json:"reversible"`
+	AffectsProtectedPaths bool              `json:"affectsProtectedPaths"`
+	Evidence              string            `json:"evidence"`
+	DataLoss              *DataLossEvidence `json:"dataLoss,omitempty"`
+}
+
+type DataLossEvidence struct {
+	Targets     []string `json:"targets"`
+	ValueReason string   `json:"valueReason"`
 }
 
 type Decision struct {
@@ -169,8 +176,8 @@ const (
 	DenyNoteSchemaVersion      = "aar-deny-note-v1"
 	SessionEventSchemaVersion  = "aar-session-event-v1"
 	FingerprintSchemaVersion   = "request-fingerprint-v2"
-	DeterministicPolicyVersion = "deterministic-v1"
-	AssessorMapperVersion      = "assessor-mapper-v1"
+	DeterministicPolicyVersion = "deterministic-v2"
+	AssessorMapperVersion      = "assessor-mapper-v2"
 	AuditSchemaVersion         = "aar-audit-v1"
 
 	AuditOutcomeDeterministic = "deterministic"

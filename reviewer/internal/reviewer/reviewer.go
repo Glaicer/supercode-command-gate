@@ -142,6 +142,7 @@ func Check(request Request, options Options) (Decision, error) {
 				} else {
 					if fingerprintForFacts(request, local, config) != decision.RequestFingerprint {
 						local.Uncertainties = appendUnique(local.Uncertainties, "a material target or script source changed during assessment")
+						local.EvidenceChanged = true
 					}
 					mapped := mapRiskAssessment(assessment, config.Policy, local)
 					decision.Decision = mapped.Decision
@@ -233,25 +234,26 @@ type fingerprintScript struct {
 }
 
 type factFingerprintInput struct {
-	FingerprintSchema string              `json:"fingerprintSchema"`
-	Command           string              `json:"command"`
-	CanonicalCWD      string              `json:"cwd"`
-	WorkspaceRoot     *string             `json:"workspaceRoot"`
-	SessionID         string              `json:"sessionId"`
-	IntentID          string              `json:"intentId"`
-	Goal              string              `json:"goal"`
-	LatestUserRequest string              `json:"latestUserRequest"`
-	Purpose           string              `json:"purpose"`
-	TrustedEnv        map[string]string   `json:"trustedEnv"`
-	RequestSchema     string              `json:"requestSchema"`
-	DecisionSchema    string              `json:"decisionSchema"`
-	ShellIRSchema     string              `json:"shellIRSchema"`
-	PolicyVersion     string              `json:"policyVersion"`
-	HardDenyCatalog   string              `json:"hardDenyCatalog"`
-	Policy            PolicyConfig        `json:"policy"`
-	Paths             []fingerprintPath   `json:"paths"`
-	Scripts           []fingerprintScript `json:"scripts"`
-	Uncertainties     []string            `json:"uncertainties,omitempty"`
+	FingerprintSchema  string              `json:"fingerprintSchema"`
+	Command            string              `json:"command"`
+	CanonicalCWD       string              `json:"cwd"`
+	WorkspaceRoot      *string             `json:"workspaceRoot"`
+	SessionID          string              `json:"sessionId"`
+	IntentID           string              `json:"intentId"`
+	Goal               string              `json:"goal"`
+	LatestUserRequest  string              `json:"latestUserRequest"`
+	Purpose            string              `json:"purpose"`
+	AssistantRationale string              `json:"assistantRationale,omitempty"`
+	TrustedEnv         map[string]string   `json:"trustedEnv"`
+	RequestSchema      string              `json:"requestSchema"`
+	DecisionSchema     string              `json:"decisionSchema"`
+	ShellIRSchema      string              `json:"shellIRSchema"`
+	PolicyVersion      string              `json:"policyVersion"`
+	HardDenyCatalog    string              `json:"hardDenyCatalog"`
+	Policy             PolicyConfig        `json:"policy"`
+	Paths              []fingerprintPath   `json:"paths"`
+	Scripts            []fingerprintScript `json:"scripts"`
+	Uncertainties      []string            `json:"uncertainties,omitempty"`
 }
 
 func fingerprintForFacts(request Request, local localAssessmentContext, config Config) string {
@@ -285,25 +287,26 @@ func fingerprintForFacts(request Request, local localAssessmentContext, config C
 		})
 	}
 	input := factFingerprintInput{
-		FingerprintSchema: FingerprintSchemaVersion,
-		Command:           request.Command,
-		CanonicalCWD:      cwd,
-		WorkspaceRoot:     workspaceRoot,
-		SessionID:         request.Session.ID,
-		IntentID:          request.Session.IntentID,
-		Goal:              request.Intent.Goal,
-		LatestUserRequest: request.Intent.LatestUserRequest,
-		Purpose:           request.Intent.Purpose,
-		TrustedEnv:        trustedEnvSnapshot(request.Env),
-		RequestSchema:     request.SchemaVersion,
-		DecisionSchema:    DecisionSchemaVersion,
-		ShellIRSchema:     ShellIRSchemaVersion,
-		PolicyVersion:     DeterministicPolicyVersion,
-		HardDenyCatalog:   CatastrophicCatalogVersion,
-		Policy:            config.Policy,
-		Paths:             paths,
-		Scripts:           scripts,
-		Uncertainties:     append([]string(nil), local.Uncertainties...),
+		FingerprintSchema:  FingerprintSchemaVersion,
+		Command:            request.Command,
+		CanonicalCWD:       cwd,
+		WorkspaceRoot:      workspaceRoot,
+		SessionID:          request.Session.ID,
+		IntentID:           request.Session.IntentID,
+		Goal:               request.Intent.Goal,
+		LatestUserRequest:  request.Intent.LatestUserRequest,
+		Purpose:            request.Intent.Purpose,
+		AssistantRationale: request.Intent.AssistantRationale,
+		TrustedEnv:         trustedEnvSnapshot(request.Env),
+		RequestSchema:      request.SchemaVersion,
+		DecisionSchema:     DecisionSchemaVersion,
+		ShellIRSchema:      ShellIRSchemaVersion,
+		PolicyVersion:      DeterministicPolicyVersion,
+		HardDenyCatalog:    CatastrophicCatalogVersion,
+		Policy:             config.Policy,
+		Paths:              paths,
+		Scripts:            scripts,
+		Uncertainties:      append([]string(nil), local.Uncertainties...),
 	}
 	payload, _ := json.Marshal(input)
 	sum := sha256.Sum256(payload)
@@ -519,6 +522,13 @@ func redactedAssessment(value any) *RiskAssessment {
 	assessment.Risks = append([]Risk(nil), assessment.Risks...)
 	for index := range assessment.Risks {
 		assessment.Risks[index].Evidence = redact(assessment.Risks[index].Evidence)
+		if detail := assessment.Risks[index].DataLoss; detail != nil {
+			copy := &DataLossEvidence{ValueReason: redact(detail.ValueReason), Targets: make([]string, len(detail.Targets))}
+			for index, target := range detail.Targets {
+				copy.Targets[index] = redact(target)
+			}
+			assessment.Risks[index].DataLoss = copy
+		}
 	}
 	assessment.Uncertainties = append([]string(nil), assessment.Uncertainties...)
 	for index := range assessment.Uncertainties {

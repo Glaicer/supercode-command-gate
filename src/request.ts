@@ -11,6 +11,7 @@ export type Request = {
     goal: string | null;
     latestUserRequest: string | null;
     purpose: null;
+    assistantRationale?: string;
   };
 };
 
@@ -25,7 +26,35 @@ export type SessionFacts = {
   intentId: string | null;
   goal: string | null;
   latestUserRequest: string | null;
+  assistantRationale?: string | null;
 };
+
+export function assistantRationaleFor(
+  messages: readonly {
+    id: string;
+    type: string;
+    content?: readonly { type: string; text?: string; id?: string }[];
+  }[],
+  messageID: string,
+  callID: string,
+): string | null {
+  const message = messages.find(
+    (item) => item.type === "assistant" && item.id === messageID,
+  );
+  const content = message?.content;
+  if (!content) return null;
+  const callIndex = content.findIndex(
+    (part) => part.type === "tool" && part.id === callID,
+  );
+  if (callIndex < 0) return null;
+  const rationale = content
+    .slice(0, callIndex)
+    .filter((part) => part.type === "reasoning" || part.type === "text")
+    .map((part) => part.text ?? "")
+    .join("\n")
+    .slice(-8192);
+  return rationale || null;
+}
 
 export const MATERIAL_ENV_KEYS = ["CDPATH", "HOME", "PWD"];
 export const REQUEST_SCHEMA_VERSION = "aar-request-v1";
@@ -66,6 +95,9 @@ export function buildRequest(
       goal: facts.goal,
       latestUserRequest: facts.latestUserRequest,
       purpose: null,
+      ...(facts.assistantRationale
+        ? { assistantRationale: facts.assistantRationale.slice(-8192) }
+        : {}),
     },
   };
 }

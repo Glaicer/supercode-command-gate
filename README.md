@@ -32,7 +32,7 @@ Deny records `aar deny-note` and retains the exact denial in memory until intent
 
 ## Command Reviewer (`aar`)
 
-The Reviewer source lives in this repository at `reviewer/`; the upstream GitHub repository is archived and no longer published. The vendored tree contains the Go module (`cmd/aar`, `internal/reviewer`), the historical V1 Gate sources (`reviewer/plugin/`) and the Reviewer README with policy profiles, grants and audit details. npm packaging excludes it: the package `files` whitelist ships only `README.md`, the root forwarders and `dist/`.
+The Reviewer source lives in this repository at `reviewer/`; the upstream GitHub repository is archived and no longer published. The vendored tree contains the Go module (`cmd/aar`, `internal/reviewer`), the historical V1 Gate sources (`reviewer/plugin/`). The V1 Gate is retained as historical source; this README documents the current V2 Gate and the shared Reviewer. npm packaging excludes it: the package `files` whitelist ships only `README.md`, the root forwarders and `dist/`.
 
 Build and install (Go 1.27 toolchain):
 
@@ -44,7 +44,209 @@ install dist/reviewer-v<version>/aar-v<version>-<os>-<arch> ~/.local/bin/aar
 aar doctor
 ```
 
-`release.sh` emits static binaries for linux-amd64, linux-arm64, darwin-amd64 and darwin-arm64 plus `SHA256SUMS`. For a single local binary, `go build -o aar ./cmd/aar` is enough. Reviewer configuration is owned by the Reviewer itself — `$AAR_CONFIG`, then `$XDG_CONFIG_HOME/aar/config.toml`, then the platform config path, overlaid by a project `.aar.toml`; see `reviewer/README.md`.
+`release.sh` emits static binaries for linux-amd64, linux-arm64, darwin-amd64 and darwin-arm64 plus `SHA256SUMS`. For a single local binary, `go build -o aar ./cmd/aar` is enough. The release binary embeds the pinned Bash parser and has no runtime download or provider SDK dependency. The Reviewer parses and assesses commands, returns a Decision, and writes a redacted audit record; it never executes the command under review. Reviewer configuration is documented below.
+
+## Reviewer configuration
+
+The Reviewer uses the first existing file from `$AAR_CONFIG`,
+`$XDG_CONFIG_HOME/aar/config.toml`, and the platform config path:
+`~/.config/aar/config.toml` on Linux or
+`~/Library/Application Support/aar/config.toml` on macOS. A `.aar.toml` at the
+workspace root (or current working directory when no workspace root is supplied)
+overlays the selected global file. Tables merge their entries; supplied arrays
+replace the corresponding global arrays.
+
+This file owns assessor, policy, grants, and audit settings. Gate settings such
+as `binaryPath`, `timeoutMs`, and `commandRewriter` belong in OpenCode config,
+not this TOML file. Example:
+
+```toml
+[assessor] # Model connection and assessment behavior.
+model = "provider/model-id" # Primary model identifier accepted by your endpoint.
+fallbackModels = ["provider/fallback-model"] # Backup models for subsequent attempts.
+baseUrl = "https://api.example.test/v1" # API base URL; AAR appends /chat/completions.
+apiKeyEnv = "PROVIDER_API_KEY" # Name of the exported variable holding the key, not the key itself.
+totalTimeoutMs = 5000 # Total assessment deadline in milliseconds, including fallback attempts.
+onUnavailable = "deny" # Failed assessment: deny, or ask (V2 dialogs require interactive approvalMode).
+
+[assessor.options] # Additional API request fields supported by your endpoint.
+temperature = 0 # Requests less random model output; omit if the endpoint does not support it.
+
+[policy] # Local rules that map evidence and model risks to decisions.
+profile = "data-loss" # Risk profile: data-loss, balanced, or strict; descriptions below.
+protectedPaths = ["/important/data"] # Paths that need protection during review.
+
+[policy.categoryOverrides] # Override model risk handling for individual categories.
+network = "inherit" # Use the profile's network rule; alternatives: ignore, ask, deny.
+
+[grants] # Human approval records and session trust.
+sessionTrust = true # Offer Trust exact for session only when the command is eligible.
+maxAgeSeconds = 86400 # Clean up grant records older than 24 hours.
+reservationTTLSeconds = 600 # Pending approval reservation expires after 10 minutes.
+
+[audit] # Persistent audit and approval state.
+dir = "/path/to/aar-state" # State directory; omit to use the environment/default path.
+```
+
+`assessor.apiKeyEnv` names the environment variable holding the credential;
+the key itself is never stored in configuration, requests, or audit records.
+Export that variable before starting OpenCode. Run `aar doctor` from the
+project directory to check the configuration and state directory; this does
+not test a live model response.
+
+### Assessor settings
+
+| Key in `[assessor]` | Default  | Meaning                                                                                                            |
+| ------------------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `model`             | Unset    | Primary model identifier sent to the endpoint.                                                                     |
+| `fallbackModels`    | `[]`     | Backup model identifiers for subsequent attempts.                                                                  |
+| `baseUrl`           | Unset    | OpenAI-compatible API URL; `/chat/completions` is appended unless already present. Remote endpoints require HTTPS. |
+| `apiKeyEnv`         | Unset    | Environment variable name containing the API credential.                                                           |
+| `totalTimeoutMs`    | `5000`   | Total assessment time budget in milliseconds, including fallback attempts.                                         |
+| `onUnavailable`     | `"deny"` | `"deny"` or `"ask"` when assessment cannot be completed, including invalid model responses.                        |
+
+Without an assessor model, deterministic review remains available. Commands
+requiring model assessment use the unavailable action. When configuring a
+model, provide its endpoint and credential environment variable.
+
+`[assessor.options]` passes additional fields to the API request, such as
+`temperature`; support depends on the endpoint. AAR supplies `model` and
+`messages` itself. Credential-bearing option names are rejected; use
+`apiKeyEnv` instead.
+
+`[assessor.contextWindows]` optionally maps model identifiers to positive
+integer token capacities. A model without an entry is still attempted.
+`[assessor.interpreters.<name>]` accepts `inlineFlags` and `fileExtensions`,
+both arrays of strings, to extend script evidence collection. This does not
+change the Bash parser or authorize the interpreter's commands.
+
+```toml
+[assessor.contextWindows] # Optional context capacities, keyed by model identifier.
+"provider/model-id" = 128000 # Approximate token capacity used to check whether evidence fits.
+
+[assessor.interpreters.bun] # Recognize Bun script sources for evidence collection.
+inlineFlags = ["-e", "--eval"] # Flags whose following argument contains inline source code.
+fileExtensions = [".js", ".ts"] # Script filename extensions recognized for this interpreter.
+```
+
+### Policy settings
+
+| Key in `[policy]`    | Default       | Meaning                                                                                              |
+| -------------------- | ------------- | ---------------------------------------------------------------------------------------------------- |
+| `profile`            | `"data-loss"` | `"data-loss"`, `"balanced"`, or `"strict"`.                                                          |
+| `protectedPaths`     | `[]`          | Paths treated as protected during review.                                                            |
+| `categoryOverrides`  | `{}`          | Per-category model risk handling, configured as a table below.                                       |
+| `autoAllowAdditions` | `[]`          | Exact additional argument vectors and their permitted path scopes, configured as array tables below. |
+
+`data-loss` requires a concrete `critical_data_loss` risk with high or critical
+severity, irreversible effects, and either a protected target or structured
+`dataLoss.targets` plus a nonempty `dataLoss.valueReason` explaining which
+valuable data would be lost. Likely/certain risks deny; possible risks ask.
+Recursion, `rm`, unknown file contents, parser limitations, and free-text
+uncertainties alone do not block. Ordinary project cleanup is expected work.
+Static `rm` confined to unprotected temporary-directory contents is allowed
+without the assessor after checking the complete program and canonical paths.
+Deleting a cataloged system root or the actual `HOME` tree still hard-denies.
+
+`balanced` also considers credential access, privilege,
+persistence, and high-impact external, network, process, or resource risks.
+`strict` considers all risk categories. Enabled risks still pass through the
+severity and likelihood rules; a profile does not reject every reported risk.
+
+`[policy.categoryOverrides]` accepts `"inherit"`, `"ignore"`, `"ask"`, or
+`"deny"` for these categories:
+
+```text
+critical_data_loss, credential_access, external_side_effect, network,
+privilege, persistence, process_control, resource_exhaustion,
+opaque_execution, goal_mismatch
+```
+
+Overrides affect model risk mapping, not Hard Deny rules. `balanced` and
+`strict` retain the conservative uncertainty checks. Changed executable
+sources/targets during assessment require a fresh review in every profile.
+`autoAllowAdditions` matches the complete `argv`, with
+no wildcard or prefix matching. Commands with path operands need `pathScope`;
+these additions do not override Hard Deny or dynamic-syntax checks.
+
+```toml
+[[policy.autoAllowAdditions]] # One additional exact command allowed by deterministic review.
+argv = ["my-tool", "--version"] # Complete argument vector; no wildcard or prefix matching.
+```
+
+### Grants and audit settings
+
+| Key                            | Default   | Meaning                                                                 |
+| ------------------------------ | --------- | ----------------------------------------------------------------------- |
+| `grants.sessionTrust`          | `true`    | Offer session trust for an exact command when its evidence is eligible. |
+| `grants.maxAgeSeconds`         | `86400`   | Age threshold for cleaning up grant records.                            |
+| `grants.reservationTTLSeconds` | `600`     | Lifetime of a pending approval reservation.                             |
+| `audit.dir`                    | Automatic | State directory containing audit and approval records.                  |
+
+When `audit.dir` is unset, the state directory is selected from `$AAR_STATE_DIR`,
+`$XDG_STATE_HOME/aar`, then `~/.local/state/aar`. Use an absolute path when
+setting it explicitly. Nonpositive timeout and grant lifetime values fall
+back to their defaults; they do not disable time limits.
+
+Inspect a stored audit record without exposing raw secret-like values:
+
+```sh
+aar explain --audit-id <AUDIT_ID>
+```
+
+Audit records classify outcomes as `deterministic`, `model`, `grant`, or
+`failure`, and include the selected profile, assessor attempt metadata, and
+redacted RiskAssessment evidence when one exists.
+
+## Shell compatibility
+
+The Reviewer always parses commands using Bash grammar; the request does not
+select a shell. Bash-compatible syntax can also be valid in zsh, and script evidence
+collection recognizes `zsh -c` and `.zsh` files, but this is not full zsh syntax
+support. The V2 Gate accepts only Bash as the native execution shell;
+sh/zsh/fish/PowerShell invocations are refused before execution. Successful Bash parsing does not
+guarantee identical execution semantics in another shell.
+
+Ordinary `python3 script.py`, `node script.js`, and quoted `python3 -c '...'`
+or `node -e '...'` invocations use shared shell syntax. Their embedded code is
+Python or JavaScript; surrounding expansions and globbing still belong to the
+shell. The Reviewer leaves execution and shell selection to OpenCode.
+
+### Real command dump results
+
+On 2026-10-05, all 7,179 JSON-encoded command strings in
+`../../.scratch/029-auto-approval-reviewer/cmds.txt` were decoded and passed
+to the Reviewer's actual `ParseShell` function. No dumped command was executed.
+
+| Result                          |        Commands |
+| ------------------------------- | --------------: |
+| Parsed successfully             | 7,177 (99.972%) |
+| Parsed without dynamic features |           3,541 |
+| Parsed with dynamic features    |           3,636 |
+| Parse failures                  |               2 |
+
+Dump line 5302 failed because `${(P)v:-—}` uses zsh parameter expansion flags.
+Line 7117 failed because of an unclosed double quote. Among successful parses,
+1,207 commands contained recognized Python or Node invocations. These results
+describe this dump, not a guarantee for future commands. Dynamic features
+include variables, heredocs, loops, and redirections; successful parsing alone
+does not imply automatic approval.
+
+### Parse-failure behavior
+
+For a fresh request, a parse failure skips deterministic auto-allow and goes to
+the Command Risk Assessor with the failure recorded as local uncertainty.
+In `data-loss`, the uncertainty alone does not block; the assessor must identify
+a concrete material data-loss risk. In `balanced` and `strict`, it forces an
+otherwise allowed assessment to `ask`. If the assessor is unavailable, the
+default is `deny`, or `ask` when `assessor.onUnavailable = "ask"` is configured.
+
+The V2 Gate defaults to `approvalMode: "never-ask"`, so a Reviewer `ask`
+becomes a policy refusal without a dialog. With `approvalMode: "interactive"`,
+the Gate waits for an explicit human reply through its TUI adapter. Allow once
+records a grant, then the Gate rechecks the exact command before continuing
+the original native call. Session trust is unavailable for parse failures.
+Approval does not repair malformed syntax or change the execution shell.
 
 ## Installation and migration from V1
 
@@ -75,15 +277,15 @@ Replace the V1 plugin registration; do not run both Gates. Manually copy values 
 
 Native `plugin add` also registers the bare package in global `cli.json`. Server inventory discovers its TUI half; operational settings come from RPC, not duplicated client options. Both registrations resolve to one TUI instance. Config changes require a **fresh location/service boot**; already-active locations can retain the old inventory/options. Do not restart the service hosting an active agent. A directory target must be an installed package directory with dependencies; standalone JS paths are not supported. Root `index.js`, `tui.js` and `rpc.js` forward to compiled JavaScript. The UI uses host dialogs and host Solid; there is no raw JSX/TSX or bundled renderer.
 
-| Server option | Default | Explicit environment override |
-| --- | --- | --- |
-| `binaryPath` | `aar` | `AAR_BINARY_PATH` |
-| `tools` | `["bash", "shell"]` | `AAR_GATE_TOOLS` (comma-separated) |
-| `timeoutMs` | `5500` | `AAR_GATE_TIMEOUT_MS` |
-| `commandRewriter` | `none` | `AAR_GATE_COMMAND_REWRITER` |
-| `rewriterPath` | `rtk` | `AAR_GATE_REWRITER_PATH` |
-| `onReviewerFailure` | `deny` | `AAR_GATE_ON_REVIEWER_FAILURE` |
-| `approvalMode` | `never-ask` | — |
+| Server option       | Default             | Explicit environment override      |
+| ------------------- | ------------------- | ---------------------------------- |
+| `binaryPath`        | `aar`               | `AAR_BINARY_PATH`                  |
+| `tools`             | `["bash", "shell"]` | `AAR_GATE_TOOLS` (comma-separated) |
+| `timeoutMs`         | `5500`              | `AAR_GATE_TIMEOUT_MS`              |
+| `commandRewriter`   | `none`              | `AAR_GATE_COMMAND_REWRITER`        |
+| `rewriterPath`      | `rtk`               | `AAR_GATE_REWRITER_PATH`           |
+| `onReviewerFailure` | `deny`              | `AAR_GATE_ON_REVIEWER_FAILURE`     |
+| `approvalMode`      | `never-ask`         | —                                  |
 
 Explicit package options take precedence over environment overrides. `approvalTimeoutMs` is a server-only option, default `600000`. There is no environment override for `approvalMode`; it accepts only `never-ask` and `interactive` (matched case-insensitively like the other enum options), and any other value is an invalid setting that denies — including invalid settings combined with passthrough.
 
@@ -130,6 +332,18 @@ Every public user admission, including plugin/subagent `session.prompt`, is auth
 
 New admission, canonical Goal replacement/clear, native `/clear` and session deletion invalidate grants, pending approvals and deny suppression. Parent changes conservatively invalidate known descendants. Native `/clear` uses a public TUI keymap bridge: Reviewer invalidation must succeed before dispatching the native command; an unavailable bridge disables the approval adapter. Tab close and turn idle do not end the session. Server restart/location reload resets persisted Reviewer authorization before first review; a new or expired client connection conservatively resets known sessions. Live-event notifications are not the sole source of authorization: context generation is reconciled before review, reply and continuation.
 
+## Review context
+
+The Reviewer receives the active Goal, latest user request, canonical working
+directory, workspace root, protected paths, and temporary-directory boundary.
+When OpenCode exposes the owning assistant message in session context, the Gate
+also sends up to 8,192 characters of its text/reasoning preceding the exact tool
+call as `intent.assistantRationale`. Other tool outputs, provider state, later
+reasoning, and messages from other calls are excluded. Missing rationale does
+not block; provided rationale is contextual evidence and cannot bypass Hard
+Deny. It is bound to the assessment fingerprint and checked for changes during
+review and approval. It is sent to the configured assessor provider.
+
 ## RTK and invocation integrity
 
 Server options `commandRewriter: "none" | "rtk"` (default `"none"`) and `rewriterPath` (default `"rtk"`) also accept `AAR_GATE_COMMAND_REWRITER` and `AAR_GATE_REWRITER_PATH`; explicit options win. RTK is a trusted optimizer, not a safety dependency. Gate invokes the binary as `rtk rewrite <whole-command>` with `shell: false`, actual cwd and an allowlisted optimizer environment (PATH/HOME/PWD, no provider keys or session secrets). It never executes the submitted command during rewriting. Successful non-empty trimmed stdout becomes the Verbatim review subject and native command. Missing RTK, empty output, non-zero exit, oversized output or deadline failure keep the original command and still require the ordinary Reviewer Decision. Cancellation stops the call, not a fallback execution.
@@ -155,6 +369,26 @@ AAR_PREBUILT=/absolute/path/to/existing/aar pnpm test:packed
 AAR_PREBUILT=/absolute/path/to/existing/aar pnpm test:human:packed
 GATE_PACKED=1 GATE_LONG_HUMAN=1 AAR_PREBUILT=/absolute/path/to/existing/aar node --test test/long-command-human.test.mjs
 ```
+
+Run Reviewer tests from its module directory:
+
+```sh
+cd reviewer
+go test ./...
+```
+
+The frozen assessor smoke corpus is advisory and must be run with an explicit
+model/configuration:
+
+```sh
+AAR_BINARY_PATH=/path/to/aar \
+AAR_SMOKE_CONFIG=/path/to/aar/config.toml \
+AAR_SMOKE_MODEL=provider/model-id \
+AAR_SMOKE_API_KEY_ENV=PROVIDER_API_KEY \
+npm run test:smoke
+```
+
+The smoke command above runs from `reviewer/`; it contacts the explicitly configured model endpoint.
 
 `compile` emits server/TUI/RPC and excludes test sources; `prepack` regenerates compiled output. Build/runtime dependency pins were rechecked against registry.npmjs.org for host 2.0.22; its plugin package pins client 2.0.22 and Effect 4.0.0-rc.112. Solid is build-time/types-only: the host supplies its own runtime instance, and this dialog-only UI needs no JSX transform.
 

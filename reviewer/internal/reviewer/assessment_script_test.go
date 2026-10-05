@@ -181,7 +181,7 @@ func TestConfiguredInterpreterAndDynamicSourceAreExplicit(t *testing.T) {
 		fake := &fakeModelCall{responses: []string{`{"risks":[],"uncertainties":[]}`}}
 		decision, err := reviewer.Check(assessorRequest(t, `python3 -c "$SCRIPT"`), reviewer.Options{
 			StateDir:  t.TempDir(),
-			Config:    &reviewer.Config{Assessor: reviewer.AssessorConfig{Model: "primary", OnUnavailable: "deny"}},
+			Config:    &reviewer.Config{Assessor: reviewer.AssessorConfig{Model: "primary", OnUnavailable: "deny"}, Policy: reviewer.PolicyConfig{Profile: "strict"}},
 			ModelCall: fake,
 		})
 		if err != nil {
@@ -208,7 +208,7 @@ func TestConfiguredInterpreterAndDynamicSourceAreExplicit(t *testing.T) {
 	})
 }
 
-func TestUnreadableScriptSourceIsExplicit(t *testing.T) {
+func TestStrictUnreadableScriptSourceIsExplicit(t *testing.T) {
 	workspace := t.TempDir()
 	directory := filepath.Join(workspace, "not-a-script")
 	if err := os.Mkdir(directory, 0o700); err != nil {
@@ -225,7 +225,7 @@ func TestUnreadableScriptSourceIsExplicit(t *testing.T) {
 	}
 	decision, err := reviewer.Check(request, reviewer.Options{
 		StateDir:  t.TempDir(),
-		Config:    &reviewer.Config{Assessor: reviewer.AssessorConfig{Model: "primary", OnUnavailable: "deny"}},
+		Config:    &reviewer.Config{Assessor: reviewer.AssessorConfig{Model: "primary", OnUnavailable: "deny"}, Policy: reviewer.PolicyConfig{Profile: "strict"}},
 		ModelCall: fake,
 	})
 	if err != nil {
@@ -247,8 +247,8 @@ func TestNestedInterpreterSourceReachesAssessor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
 	}
-	if decision.Decision != reviewer.DecisionAsk || len(fake.requests) != 1 || !strings.Contains(fake.requests[0].UserPrompt, jsonStringContent(`print("nested")`)) {
-		t.Fatalf("decision = %#v, requests = %#v, want nested source evidence and dynamic ask", decision, fake.requests)
+	if decision.Decision != reviewer.DecisionAllow || len(fake.requests) != 1 || !strings.Contains(fake.requests[0].UserPrompt, jsonStringContent(`print("nested")`)) {
+		t.Fatalf("decision = %#v, requests = %#v, want nested source evidence and safe data-loss allow", decision, fake.requests)
 	}
 }
 
@@ -308,8 +308,8 @@ func TestMissingScriptEvidenceIsExplicitAndNotGrantEligible(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
 	}
-	if decision.Decision != reviewer.DecisionAsk || decision.GrantEligible {
-		t.Fatalf("decision = %#v, want ask and no grant eligibility", decision)
+	if decision.Decision != reviewer.DecisionAllow || decision.GrantEligible {
+		t.Fatalf("decision = %#v, want data-loss allow without a concrete risk and no grant eligibility", decision)
 	}
 	if len(fake.requests) != 1 || !strings.Contains(fake.requests[0].UserPrompt, `"status":"missing"`) || !strings.Contains(fake.requests[0].UserPrompt, "missing.py") {
 		t.Fatalf("model prompt did not describe missing entrypoint: %#v", fake.requests)

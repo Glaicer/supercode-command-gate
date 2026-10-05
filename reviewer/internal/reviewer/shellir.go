@@ -54,7 +54,7 @@ type IRArgument struct {
 	Static          bool     `json:"static"`
 	Span            IRSpan   `json:"span"`
 	DynamicFeatures []string `json:"dynamicFeatures,omitempty"`
-	Raw             string   `json:"-"`
+	Raw             string   `json:"raw,omitempty"`
 }
 
 type IROperator struct {
@@ -262,7 +262,13 @@ func (c *shellConverter) convertCall(call *syntax.CallExpr) IRExecution {
 		command.Static = false
 		if assignment != nil {
 			c.ir.Nodes = append(c.ir.Nodes, IRNode{Kind: "assignment", Dynamic: true, Span: spanFor(assignment)})
+			if assignment.Value != nil {
+				c.recoverWord(assignment.Value)
+			}
 		}
+	}
+	if len(call.Args) == 0 && len(call.Assigns) > 0 {
+		return IRExecution{Kind: "assignment", CommandIndex: -1, Dynamic: true, Span: spanFor(call)}
 	}
 	for _, word := range call.Args {
 		fact := c.recoverWord(word)
@@ -303,18 +309,40 @@ func (c *shellConverter) convertCall(call *syntax.CallExpr) IRExecution {
 	for _, mode := range command.AccessModes {
 		c.ir.AccessModes = appendUnique(c.ir.AccessModes, mode)
 	}
+	optionsEnded, optionValue := false, false
 	for index, argument := range command.ArgumentFacts {
 		if index == 0 {
 			continue
+		}
+		if optionValue {
+			optionValue = false
+			continue
+		}
+		if !optionsEnded && argument.Static && argument.Value == "--" {
+			optionsEnded = true
+			continue
+		}
+		if !optionsEnded && command.Name == "mkdir" && argument.Static && (argument.Value == "-m" || argument.Value == "--mode" || argument.Value == "--context") {
+			optionValue = true
+			continue
+		}
+		if !optionsEnded && argument.Static && strings.HasPrefix(argument.Value, "-") && !strings.ContainsAny(argument.Value, "/\\") {
+			continue
+		}
+		mode := "unknown"
+		if command.Name == "mkdir" {
+			mode = "create"
+		} else if command.Name == "rm" {
+			mode = "delete"
 		}
 		c.ir.PathCandidates = append(c.ir.PathCandidates, IRPathCandidate{
 			Value:      argument.Value,
 			Static:     argument.Static,
 			Role:       "argument",
-			AccessMode: "unknown",
+			AccessMode: mode,
 			Span:       argument.Span,
 		})
-		c.ir.AccessModes = appendUnique(c.ir.AccessModes, "unknown")
+		c.ir.AccessModes = appendUnique(c.ir.AccessModes, mode)
 	}
 
 	index := len(c.ir.Commands)
@@ -715,6 +743,10 @@ func isHereDocument(operator syntax.RedirOperator) bool {
 
 func inferAccessModes(name string) []string {
 	switch name {
+	case "mkdir":
+		return []string{"create"}
+	case "rm":
+		return []string{"delete"}
 	case "pwd", "cd", "basename", "dirname", "realpath", "readlink":
 		return []string{"metadata"}
 	case "cat", "head", "tail", "less", "more", "file", "stat", "du", "df", "wc", "sort", "uniq", "cut", "tr", "diff", "cmp", "comm", "sed", "awk", "git":

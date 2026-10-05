@@ -163,9 +163,38 @@ func (e *policyEvaluator) commandSafe(command IRCommand, state policyState, stdi
 		return e.safeAwk(args, state.cwd, stdinSafe)
 	case "git":
 		return e.safeGit(args, state.cwd)
+	case "rm":
+		return e.safeTemporaryRemoval(args, state.cwd), state
 	default:
 		return false, state
 	}
+}
+
+func (e *policyEvaluator) safeTemporaryRemoval(args []string, cwd string) bool {
+	operands := 0
+	optionsEnded := false
+	for _, arg := range args {
+		if !optionsEnded && arg == "--" {
+			optionsEnded = true
+			continue
+		}
+		if !optionsEnded && strings.HasPrefix(arg, "-") {
+			if strings.HasPrefix(arg, "--") {
+				if arg != "--recursive" && arg != "--force" && arg != "--dir" && arg != "--verbose" && arg != "--one-file-system" && arg != "--preserve-root" {
+					return false
+				}
+			} else if len(arg) < 2 || strings.Trim(arg[1:], "rfRdivI") != "" {
+				return false
+			}
+			continue
+		}
+		resolved, ok := e.resolvePath(arg, cwd)
+		if !ok || resolved == e.tempRoot || !pathWithin(resolved, e.tempRoot) || e.isProtected(resolved) || isHardDenyTarget(resolved) {
+			return false
+		}
+		operands++
+	}
+	return operands > 0
 }
 
 type optionGrammar struct {
@@ -1201,6 +1230,11 @@ func autoAllowRule(ir ShellIR, additionUsed bool) string {
 		return "AA001"
 	}
 	for _, command := range ir.Commands {
+		if command.Name == "rm" {
+			return "AA010"
+		}
+	}
+	for _, command := range ir.Commands {
 		switch command.Name {
 		case "cd":
 			return "AA002"
@@ -1237,6 +1271,8 @@ func autoAllowReason(rule string) string {
 		return "git uses a read-only operation over safe paths"
 	case "AA009":
 		return "the exact configured argv and path scope are safe"
+	case "AA010":
+		return "removal is confined to unprotected contents of the temporary directory and the complete program has been checked"
 	default:
 		return "the complete program uses only read-only primitives and safe paths"
 	}

@@ -1168,7 +1168,7 @@ function fingerprintFor(request) {
     workspaceRoot: request.workspaceRoot,
     sessionId: request.session.id,
     intentId: request.session.intentId ?? "",
-    policyVersion: "deterministic-v1",
+    policyVersion: "deterministic-v2",
     shellIR: "shellir-v1",
   }
   return createHash("sha256").update(canonicalJSON(input)).digest("hex")
