@@ -55,6 +55,7 @@ type Config struct {
 type AssessorConfig struct {
 	Model          string
 	FallbackModels []string
+	Fallbacks      []AssessorConnection
 	BaseURL        string
 	APIKeyEnv      string
 	TotalTimeoutMs int
@@ -67,6 +68,14 @@ type AssessorConfig struct {
 	// evidence extraction. It is intentionally data-only; it cannot authorize a
 	// command or change the local policy mapper.
 	Interpreters map[string]InterpreterForm
+}
+
+type AssessorConnection struct {
+	Model         string
+	BaseURL       string
+	APIKeyEnv     string
+	Options       map[string]any
+	ContextWindow int
 }
 
 type InterpreterForm struct {
@@ -99,6 +108,7 @@ type ModelCall interface {
 
 type ModelCallRequest struct {
 	Model        string
+	Connection   string
 	SystemPrompt string
 	UserPrompt   string
 	Options      map[string]any
@@ -144,10 +154,11 @@ type Decision struct {
 
 	// Audit metadata is deliberately kept off the wire. It lets the Reviewer
 	// explain the outcome without exposing operational details to the Gate.
-	AssessorModel    string `json:"-"`
-	AssessorAttempts int    `json:"-"`
-	PolicyProfile    string `json:"-"`
-	DurationMs       int64  `json:"-"`
+	AssessorConnection string `json:"-"`
+	AssessorModel      string `json:"-"`
+	AssessorAttempts   int    `json:"-"`
+	PolicyProfile      string `json:"-"`
+	DurationMs         int64  `json:"-"`
 }
 
 const (
