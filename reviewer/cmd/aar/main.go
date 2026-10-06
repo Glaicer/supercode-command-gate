@@ -22,7 +22,7 @@ func main() {
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: aar check | aar doctor | aar explain --audit-id <id> | aar grant --session <id> --fingerprint <fp> --scope once|session | aar deny-note --session <id> --fingerprint <fp> | aar session-event --session <id> --event end|clear|new-intent|goal-change")
+		return errors.New("usage: aar check | aar doctor | aar cleanup | aar explain --audit-id <id> | aar grant --session <id> --fingerprint <fp> --scope once|session | aar deny-note --session <id> --fingerprint <fp> | aar session-event --session <id> --event end|clear|new-intent|goal-change")
 	}
 	if args[0] == "--version" || args[0] == "version" {
 		if len(args) != 1 {
@@ -49,6 +49,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return err
 		}
 		return writeStatus(stdout, map[string]string{"status": "reset"})
+	}
+	if args[0] == "cleanup" {
+		if len(args) != 1 {
+			return errors.New("usage: aar cleanup")
+		}
+		removed, err := reviewer.Cleanup(reviewer.Options{StateDir: os.Getenv("AAR_STATE_DIR")})
+		if err != nil {
+			return fmt.Errorf("aar cleanup: %w", err)
+		}
+		return writeStatus(stdout, map[string]string{"status": "cleaned", "auditFiles": fmt.Sprint(removed), "reviewTrace": "cleared"})
 	}
 	if args[0] == "explain" {
 		flags, err := namedFlags(args[1:])

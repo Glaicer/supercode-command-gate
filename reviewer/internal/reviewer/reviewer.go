@@ -34,6 +34,7 @@ type auditRecord struct {
 	RequestFingerprint string          `json:"requestFingerprint"`
 	Effects            []string        `json:"effects"`
 	Profile            string          `json:"profile"`
+	AssessorConnection string          `json:"assessorConnection,omitempty"`
 	AssessorModel      string          `json:"assessorModel,omitempty"`
 	AssessorAttempts   int             `json:"assessorAttempts,omitempty"`
 	FailureKind        string          `json:"failureKind,omitempty"`
@@ -41,7 +42,7 @@ type auditRecord struct {
 	Assessment         *RiskAssessment `json:"assessment,omitempty"`
 }
 
-// Check records audit and review logs without executing Request.Command.
+// Check evaluates Request.Command without executing it and optionally saves history.
 func Check(request Request, options Options) (result Decision, resultErr error) {
 	started := time.Now()
 	config, configErr := resolveReviewerConfig(request, options)
@@ -49,9 +50,21 @@ func Check(request Request, options Options) (result Decision, resultErr error) 
 	if configErr == nil && logOptions.StateDir == "" {
 		logOptions.StateDir = config.Audit.Dir
 	}
-	log, err := newReviewLog(logOptions.StateDir)
-	if err != nil {
-		return Decision{}, err
+	var log *reviewLog
+	if configErr != nil || config.Audit.IsEnabled() {
+		stateDir, err := resolveStateDir(logOptions.StateDir)
+		if err != nil {
+			return Decision{}, err
+		}
+		unlock, err := historyLock(stateDir, false)
+		if err != nil {
+			return Decision{}, err
+		}
+		defer unlock()
+		log, err = newReviewLog(logOptions.StateDir)
+		if err != nil {
+			return Decision{}, err
+		}
 	}
 	defer func() {
 		log.record("verdict", map[string]any{
@@ -171,6 +184,7 @@ func Check(request Request, options Options) (result Decision, resultErr error) 
 					"model": trace.Model, "attempts": trace.Attempts,
 					"assessment": redactedAssessment(assessment), "error": errorText(assessorErr),
 				})
+				decision.AssessorConnection = trace.Connection
 				decision.AssessorModel = trace.Model
 				decision.AssessorAttempts = trace.Attempts
 				if assessorErr != nil {
@@ -408,6 +422,9 @@ func grantFactsEligible(local localAssessmentContext) bool {
 }
 
 func writeAudit(request Request, decision Decision, options Options, config Config) (string, error) {
+	if !config.Audit.IsEnabled() {
+		return randomID()
+	}
 	stateDir, err := resolveStateDir(options.StateDir)
 	if err != nil {
 		return "", err
@@ -437,6 +454,7 @@ func writeAudit(request Request, decision Decision, options Options, config Conf
 		RequestFingerprint: decision.RequestFingerprint,
 		Effects:            effectsFor(decision),
 		Profile:            config.Policy.Profile,
+		AssessorConnection: decision.AssessorConnection,
 		AssessorModel:      decision.AssessorModel,
 		AssessorAttempts:   decision.AssessorAttempts,
 		FailureKind:        decision.FailureKind,
@@ -493,7 +511,7 @@ func Explain(auditID string, options Options) ([]byte, error) {
 	path := filepath.Join(stateDir, "audit", auditID+".json")
 	payload, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read audit record %s: %w", auditID, err)
+		return nil, fmt.Errorf("audit record %s was not saved or is absent: %w", auditID, err)
 	}
 	var record auditRecord
 	if err := json.Unmarshal(payload, &record); err != nil {

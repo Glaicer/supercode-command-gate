@@ -119,8 +119,9 @@ type localAssessmentContext struct {
 }
 
 type assessorTrace struct {
-	Model    string
-	Attempts int
+	Model      string
+	Connection string
+	Attempts   int
 }
 
 type mappingResult struct {
@@ -141,19 +142,10 @@ func assessCommand(request Request, ir ShellIR, options Options, config Config, 
 	if config.Assessor.Model == "" {
 		return RiskAssessment{}, local, trace, errors.New("assessor.model is required")
 	}
-	models := make([]string, 0, 1+len(config.Assessor.FallbackModels))
-	models = append(models, config.Assessor.Model)
-	for _, model := range config.Assessor.FallbackModels {
-		if model != "" {
-			models = append(models, model)
-		}
-	}
-	if len(models) == 0 {
-		return RiskAssessment{}, local, trace, errors.New("assessor.model is required")
-	}
+	connections := assessorConnections(config.Assessor)
 	singleResponse := os.Getenv(smokeSingleResponseEnv) == "1"
 	if singleResponse {
-		models = models[:1]
+		connections = connections[:1]
 	}
 
 	deadline := time.Duration(config.Assessor.TotalTimeoutMs) * time.Millisecond
@@ -163,18 +155,25 @@ func assessCommand(request Request, ir ShellIR, options Options, config Config, 
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 
-	modelCall := options.ModelCall
-	if modelCall == nil {
-		apiKey, err := assessorAPIKey(config.Assessor)
-		if err != nil {
-			return RiskAssessment{}, local, trace, err
-		}
-		modelCall = &openAIModelCall{baseURL: config.Assessor.BaseURL, apiKey: apiKey, client: http.DefaultClient}
-	}
 	var lastErr error
 	lastFailureKind := AssessorFailureProvider
 	changedDuringAssessment := false
-	for _, model := range models {
+	for index, connection := range connections {
+		model := connection.Model
+		label := connectionLabel(index)
+		modelCall := options.ModelCall
+		if modelCall == nil {
+			apiKey, err := assessorAPIKey(AssessorConfig{APIKeyEnv: connection.APIKeyEnv})
+			if err != nil {
+				lastErr = fmt.Errorf("%s credential unavailable", label)
+				log.record("assessor-unavailable", map[string]any{"connection": label, "error": "credential unavailable"})
+				continue
+			}
+			modelCall = &openAIModelCall{baseURL: connection.BaseURL, apiKey: apiKey, client: http.DefaultClient}
+		}
+		remainingDeadline, _ := ctx.Deadline()
+		connectionCtx, connectionCancel := context.WithTimeout(ctx, time.Until(remainingDeadline)/time.Duration(len(connections)-index))
+
 		modelSkipped := false
 		attempts := assessorAttemptsPerModel
 		if singleResponse {
@@ -182,22 +181,37 @@ func assessCommand(request Request, ir ShellIR, options Options, config Config, 
 		}
 		for attempt := 0; attempt < attempts; attempt++ {
 			if err := ctx.Err(); err != nil {
+				connectionCancel()
 				return RiskAssessment{}, local, trace, fmt.Errorf("assessor deadline exceeded: %w", err)
+			}
+			if connectionCtx.Err() != nil {
+				lastErr = errors.New("connection deadline exceeded")
+				break
 			}
 			promptRequest, attemptLocal := buildModelCallRequest(request, ir, options, config)
 			local = attemptLocal
-			if !modelContextFits(config.Assessor, model, promptRequest) {
+			promptRequest.Options = cloneMap(connection.Options)
+			promptRequest.Connection = label
+			capacity := config.Assessor
+			if connection.ContextWindow > 0 {
+				capacity.ContextWindows = map[string]int{model: connection.ContextWindow}
+			}
+			if !modelContextFits(capacity, model, promptRequest) {
 				lastErr = fmt.Errorf("model %q cannot fit the complete assessor evidence", model)
 				modelSkipped = true
 				break
 			}
 			promptRequest.Model = model
 			trace.Model = model
+			trace.Connection = label
 			trace.Attempts++
-			log.record("assessor-call", map[string]any{"model": model, "attempt": trace.Attempts})
-			response, err := modelCall.Call(ctx, cloneModelCallRequest(promptRequest))
+			log.record("assessor-call", map[string]any{"connection": label, "model": model, "attempt": trace.Attempts})
+			response, err := modelCall.Call(connectionCtx, cloneModelCallRequest(promptRequest))
+			if deadlineErr := connectionCtx.Err(); deadlineErr != nil {
+				err = deadlineErr
+			}
 			log.record("assessor-response", map[string]any{
-				"model": model, "attempt": trace.Attempts, "response": response, "error": errorText(err),
+				"connection": label, "model": model, "attempt": trace.Attempts, "response": response, "error": errorText(err),
 			})
 			if err != nil {
 				lastErr = err
@@ -228,8 +242,10 @@ func assessCommand(request Request, ir ShellIR, options Options, config Config, 
 				attemptLocal.Uncertainties = appendUnique(attemptLocal.Uncertainties, "a relevant script source changed during assessment")
 				attemptLocal.EvidenceChanged = true
 			}
+			connectionCancel()
 			return assessment, attemptLocal, trace, nil
 		}
+		connectionCancel()
 		if modelSkipped {
 			continue
 		}
@@ -241,6 +257,23 @@ func assessCommand(request Request, ir ShellIR, options Options, config Config, 
 		kind: lastFailureKind,
 		err:  fmt.Errorf("all assessor attempts failed: %w", lastErr),
 	}
+}
+
+func assessorConnections(config AssessorConfig) []AssessorConnection {
+	connections := []AssessorConnection{{Model: config.Model, BaseURL: config.BaseURL, APIKeyEnv: config.APIKeyEnv, Options: config.Options}}
+	for _, model := range config.FallbackModels {
+		if model != "" {
+			connections = append(connections, AssessorConnection{Model: model, BaseURL: config.BaseURL, APIKeyEnv: config.APIKeyEnv, Options: config.Options})
+		}
+	}
+	return append(connections, config.Fallbacks...)
+}
+
+func connectionLabel(index int) string {
+	if index == 0 {
+		return "primary"
+	}
+	return fmt.Sprintf("fallback[%d]", index-1)
 }
 
 const assessorOutputTokenReserve = 512
@@ -842,9 +875,11 @@ func (call *openAIModelCall) Call(ctx context.Context, request ModelCallRequest)
 	if client == nil {
 		client = http.DefaultClient
 	}
-	response, err := client.Do(httpRequest)
+	safeClient := *client
+	safeClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := safeClient.Do(httpRequest)
 	if err != nil {
-		return "", err
+		return "", errors.New("assessor HTTP request failed")
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(response.Body)
@@ -872,6 +907,9 @@ func chatCompletionsURL(base string) (string, error) {
 	// traffic must use HTTPS so credentials never cross the network in plaintext.
 	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname())) {
 		return "", errors.New("assessor.baseUrl must use HTTPS outside loopback test endpoints")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("assessor.baseUrl cannot contain credentials, query parameters, or fragments")
 	}
 	if !strings.HasSuffix(strings.TrimSuffix(parsed.Path, "/"), "/chat/completions") {
 		parsed.Path = strings.TrimSuffix(parsed.Path, "/") + "/chat/completions"

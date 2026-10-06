@@ -12,18 +12,37 @@ import (
 // It deliberately reports contract versions and operational deadlines without
 // exposing configuration values or credential material.
 type DoctorReport struct {
-	SchemaVersion              string `json:"schemaVersion"`
-	ContractVersion            string `json:"contractVersion"`
-	Status                     string `json:"status"`
-	RequestSchemaVersion       string `json:"requestSchemaVersion"`
-	DecisionSchemaVersion      string `json:"decisionSchemaVersion"`
-	ReviewerTimeoutMs          int    `json:"reviewerTimeoutMs"`
-	ShellIRSchemaVersion       string `json:"shellIRSchemaVersion"`
-	HardDenyCatalogVersion     string `json:"hardDenyCatalogVersion"`
-	DeterministicPolicyVersion string `json:"deterministicPolicyVersion"`
-	AssessorSchemaVersion      string `json:"assessorSchemaVersion"`
-	AssessorMapperVersion      string `json:"assessorMapperVersion"`
-	AssessorPromptDigest       string `json:"assessorPromptDigest"`
+	LoggingEnabled             bool               `json:"loggingEnabled"`
+	SchemaVersion              string             `json:"schemaVersion"`
+	ContractVersion            string             `json:"contractVersion"`
+	Status                     string             `json:"status"`
+	RequestSchemaVersion       string             `json:"requestSchemaVersion"`
+	DecisionSchemaVersion      string             `json:"decisionSchemaVersion"`
+	ReviewerTimeoutMs          int                `json:"reviewerTimeoutMs"`
+	ShellIRSchemaVersion       string             `json:"shellIRSchemaVersion"`
+	HardDenyCatalogVersion     string             `json:"hardDenyCatalogVersion"`
+	DeterministicPolicyVersion string             `json:"deterministicPolicyVersion"`
+	AssessorSchemaVersion      string             `json:"assessorSchemaVersion"`
+	AssessorMapperVersion      string             `json:"assessorMapperVersion"`
+	Connections                []DoctorConnection `json:"connections,omitempty"`
+	AssessorPromptDigest       string             `json:"assessorPromptDigest"`
+}
+
+type DoctorConnection struct {
+	Connection          string `json:"connection"`
+	CredentialAvailable bool   `json:"credentialAvailable"`
+}
+
+func doctorConnections(config AssessorConfig) []DoctorConnection {
+	if config.Model == "" {
+		return nil
+	}
+	result := []DoctorConnection{}
+	for index, connection := range assessorConnections(config) {
+		_, err := assessorAPIKey(AssessorConfig{APIKeyEnv: connection.APIKeyEnv})
+		result = append(result, DoctorConnection{Connection: connectionLabel(index), CredentialAvailable: err == nil})
+	}
+	return result
 }
 
 // Doctor validates the Reviewer's configuration and state directory without
@@ -49,6 +68,8 @@ func Doctor(request Request, options Options) (DoctorReport, error) {
 	}
 
 	return DoctorReport{
+		Connections:                doctorConnections(config.Assessor),
+		LoggingEnabled:             config.Audit.IsEnabled(),
 		SchemaVersion:              "aar-doctor-v1",
 		ContractVersion:            "aar-contract-v1",
 		Status:                     "ok",
@@ -69,17 +90,24 @@ func validateAssessorConfiguration(config Config) error {
 	// assessor is configured, fail at startup for missing credentials or an
 	// unusable endpoint instead of discovering the problem on the first command.
 	if config.Assessor.Model == "" {
-		if config.Assessor.BaseURL != "" || config.Assessor.APIKeyEnv != "" || len(config.Assessor.FallbackModels) > 0 || config.Assessor.OnUnavailable != defaultUnavailableAction || len(config.Assessor.Options) > 0 || len(config.Assessor.ContextWindows) > 0 || len(config.Assessor.Interpreters) > 0 {
+		if config.Assessor.BaseURL != "" || config.Assessor.APIKeyEnv != "" || len(config.Assessor.FallbackModels) > 0 || len(config.Assessor.Fallbacks) > 0 || config.Assessor.OnUnavailable != defaultUnavailableAction || len(config.Assessor.Options) > 0 || len(config.Assessor.ContextWindows) > 0 || len(config.Assessor.Interpreters) > 0 {
 			return errors.New("assessor.model is required when assessor configuration is present")
 		}
 		return nil
 	}
-	if _, err := chatCompletionsURL(config.Assessor.BaseURL); err != nil {
-		return err
+	available := false
+	for index, connection := range assessorConnections(config.Assessor) {
+		if _, err := chatCompletionsURL(connection.BaseURL); err != nil {
+			return fmt.Errorf("%s: %w", connectionLabel(index), err)
+		}
+		if _, err := assessorAPIKey(AssessorConfig{APIKeyEnv: connection.APIKeyEnv}); err == nil {
+			available = true
+		}
 	}
-	if _, err := assessorAPIKey(config.Assessor); err != nil {
-		return err
+	if !available {
+		return errors.New("all assessor connection credentials are unavailable")
 	}
+
 	return nil
 }
 

@@ -85,3 +85,60 @@ are not added to this policy.
 
 The fixed corpus, classification and measured results are in
 [ticket 12 evidence](../../../.scratch/029-command-gate-v2/12-evidence.md).
+
+## Independent Assessor providers
+
+AAR TOML can use independent ordered fallback connections:
+
+```toml
+[assessor]
+model = "primary-model"
+baseUrl = "https://provider-a.example/v1"
+apiKeyEnv = "PROVIDER_A_KEY"
+totalTimeoutMs = 5000
+options = { temperature = 0.1 }
+
+[[assessor.fallbacks]]
+model = "fallback-model"
+baseUrl = "https://provider-b.example/v1"
+apiKeyEnv = "PROVIDER_B_KEY"
+options = { temperature = 0.2 }
+contextWindow = 32768
+```
+
+Each fallback requires its own `model`, `baseUrl`, and `apiKeyEnv`; these fields
+and its `options` do not inherit primary values. Omitted `options` means an empty
+map. Optional `contextWindow` overrides the shared model-keyed `contextWindows`
+capacity hint for that connection. Evidence is never truncated. Keep credentials
+in environment variables, never TOML. URLs must use HTTPS except loopback test
+servers, and cannot contain userinfo, query parameters or fragments. Redirects
+are rejected so credentials cannot be forwarded to another endpoint.
+
+The existing `fallbackModels` retains model-only switching on the primary URL,
+key and options; configuring both nonempty `fallbackModels` and `fallbacks` is
+an error. The project `.aar.toml` overlays primary scalars and merges primary
+options as before. A project `fallbacks` array replaces the entire global array;
+an omitted array inherits it, and `fallbacks = []` clears it. Inline table arrays
+are also supported:
+
+```toml
+fallbacks = [{ model = "m", baseUrl = "https://provider-b.example/v1", apiKeyEnv = "PROVIDER_B_KEY" }]
+```
+The Gate forwards the union of explicitly declared credential environment names
+from global and project TOML to the trusted AAR process; only the selected
+connection's key is sent in each HTTP request.
+
+The primary connection runs first. Each connection gets the remaining overall
+`totalTimeoutMs` divided by the number of remaining connections, with at most
+two sequential attempts sharing that connection's allocation. Timeouts cancel
+the HTTP request. Missing credentials, exhausted transport/JSON/schema retries,
+or insufficient context capacity advance to the next connection. A validated
+RiskAssessment ends the chain even when local policy maps it to ask or deny.
+Exhaustion uses `onUnavailable`, preserving Hard Deny and approval policy.
+
+`aar doctor` checks all URL shapes and credential availability without calling
+providers. Its `connections` diagnostics and the audit `assessorConnection`
+field identify `primary` and `fallback[0]`, `fallback[1]`, etc., including identical
+model IDs, without exposing endpoints or keys. Doctor succeeds when at least
+one configured connection has an available credential, so a missing primary
+key does not prevent a usable fallback. Structural errors always fail validation.

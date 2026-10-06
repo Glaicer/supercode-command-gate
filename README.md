@@ -104,7 +104,8 @@ sessionTrust = true # Offer Trust exact for session only when the command is eli
 maxAgeSeconds = 86400 # Clean up grant records older than 24 hours.
 reservationTTLSeconds = 600 # Pending approval reservation expires after 10 minutes.
 
-[audit] # Persistent audit and approval state.
+[audit] # History and state directory.
+enabled = true # Set false to skip audit JSON and SQLite review history.
 dir = "/path/to/aar-state" # State directory; omit to use the environment/default path.
 ```
 
@@ -201,6 +202,7 @@ argv = ["my-tool", "--version"] # Complete argument vector; no wildcard or prefi
 | `grants.sessionTrust`          | `true`    | Offer session trust for an exact command when its evidence is eligible. |
 | `grants.maxAgeSeconds`         | `86400`   | Age threshold for cleaning up grant records.                            |
 | `grants.reservationTTLSeconds` | `600`     | Lifetime of a pending approval reservation.                             |
+| `audit.enabled`                | `true`    | Save audit JSON and SQLite review history; false leaves working state intact. |
 | `audit.dir`                    | Automatic | State directory containing audit and approval records.                  |
 
 When `audit.dir` is unset, the state directory is selected from `$AAR_STATE_DIR`,
@@ -218,8 +220,29 @@ Audit records classify outcomes as `deterministic`, `model`, `grant`, or
 `failure`, and include the selected profile, assessor attempt metadata, and
 redacted RiskAssessment evidence when one exists.
 
-Every `aar check` also writes events to `<state-dir>/logs/reviews.sqlite`.
-Logging is always enabled and uses the same state directory as audit and grants;
+With `[audit] enabled = false`, checks keep the same Decision and permissions
+without creating or opening audit/log files, including retries and failures.
+Existing history remains. `auditId` remains a correlation ID and does not promise
+a saved record; `aar explain` reports that an unsaved or cleaned record is absent.
+Grants and trust remain available. `aar doctor` reports effective `loggingEnabled`.
+
+Clear saved history explicitly from the project whose `.aar.toml` should apply:
+
+```sh
+aar cleanup
+```
+
+Cleanup uses the same effective configuration and state directory as checks. It
+removes audit JSON and clears `review_events`, including SQLite WAL history,
+while retaining the database file, grants, deny notes, trust, aggregate counters,
+and configuration. It works with logging disabled or absent history and is safe
+to repeat. It rejects symlink history paths and reports active checks or SQLite
+writers/readers as busy; retry after they finish. Future enabled checks can
+record new history. If cleanup fails, its error is explicit and some trace data
+may already have been cleared.
+
+When `audit.enabled` is true, `aar check` also writes events to
+`<state-dir>/logs/reviews.sqlite`. Logging uses the same state directory as audit and grants;
 by default, the database is `~/.local/state/aar/logs/reviews.sqlite`.
 The `review_events` table stores `id` (event order), `review_id` (groups one check),
 `recorded_at` (UTC), `event`, and `detail` (masked event fields as JSON).
