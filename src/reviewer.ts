@@ -15,10 +15,16 @@ const SOURCES = new Set([
   "auto-allow",
   "grant",
   "assessor",
+  "reviewed-trust",
   "unavailable",
   "deny-note",
 ]);
-const ALLOW_SOURCES = new Set(["auto-allow", "grant", "assessor"]);
+const ALLOW_SOURCES = new Set([
+  "auto-allow",
+  "grant",
+  "assessor",
+  "reviewed-trust",
+]);
 
 export type Decision = {
   schemaVersion: string;
@@ -33,6 +39,7 @@ export type Decision = {
   grantEligible: boolean;
   grantScope?: string;
   auditId: string;
+  originAuditId?: string;
 };
 
 export type DoctorReport = {
@@ -434,9 +441,16 @@ export function validateDecision(
     throw new Error("reviewer emitted invalid source");
   if (value.decision === "allow" && !ALLOW_SOURCES.has(String(value.source))) {
     throw new Error(
-      "allow decisions must come from auto-allow, grant, or assessor",
+      "allow decisions must come from auto-allow, grant, assessor, or reviewed-trust",
     );
   }
+  if (
+    value.source === "reviewed-trust" &&
+    (value.decision !== "allow" ||
+      typeof value.originAuditId !== "string" ||
+      !/^[a-f0-9]{32}$/.test(value.originAuditId))
+  )
+    throw new Error("reviewed-trust requires allow and an origin audit id");
   if (value.source === "grant" && value.decision !== "allow")
     throw new Error("grant source requires an allow decision");
   if (value.source === "deny-note" && value.decision !== "deny")
