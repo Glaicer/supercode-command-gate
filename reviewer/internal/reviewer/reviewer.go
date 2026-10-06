@@ -45,11 +45,26 @@ type auditRecord struct {
 // Check evaluates Request.Command without executing it and optionally saves history.
 func Check(request Request, options Options) (result Decision, resultErr error) {
 	started := time.Now()
+	if err := validateRequest(request); err != nil {
+		return Decision{}, err
+	}
 	config, configErr := resolveReviewerConfig(request, options)
 	logOptions := options
 	if configErr == nil && logOptions.StateDir == "" {
 		logOptions.StateDir = config.Audit.Dir
 	}
+	defer func() {
+		stateDir, err := resolveStateDir(logOptions.StateDir)
+		if err == nil {
+			err = recordStats(stateDir, result, resultErr)
+		}
+		if err != nil {
+			result.StatsError = "usage statistics were not updated: " + err.Error()
+			if resultErr != nil {
+				resultErr = fmt.Errorf("%w; %s", resultErr, result.StatsError)
+			}
+		}
+	}()
 	var log *reviewLog
 	if configErr != nil || config.Audit.IsEnabled() {
 		stateDir, err := resolveStateDir(logOptions.StateDir)
@@ -80,9 +95,7 @@ func Check(request Request, options Options) (result Decision, resultErr error) 
 		"command": request.Command, "cwd": request.CWD,
 		"sessionId": request.Session.ID, "intentId": request.Session.IntentID,
 	})
-	if err := validateRequest(request); err != nil {
-		return Decision{}, err
-	}
+
 	if configErr != nil {
 		return Decision{}, configErr
 	}

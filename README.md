@@ -241,6 +241,33 @@ writers/readers as busy; retry after they finish. Future enabled checks can
 record new history. If cleanup fails, its error is explicit and some trace data
 may already have been cleared.
 
+Inspect aggregate Reviewer outcomes using the same config/state environment:
+
+```sh
+aar stats
+```
+
+The summary shows Processed, Approved by policy, Approved by LLM (fresh/reused),
+Approved by human, Denied, Ask, Errors, and the start of accumulation. Processed
+counts each accepted, completed check once, including errors without a Decision;
+repeated checks count again, while internal Assessor retries do not. Policy,
+fresh/reused LLM, human approval, Deny, Ask, and Errors are mutually exclusive.
+Composed policy plus reviewed trust is one reused LLM approval. Malformed stdin
+or an invalid request is excluded; other CLI commands do not increment counters.
+Reviewer Ask remains Ask if Gate's never-ask mode denies it. These are Reviewer
+outcomes, not executed commands, Gate outcomes, or native permission decisions.
+
+`stats.json` stores only versioned counters and the period start, independently
+of history, with atomic replacement and a process lock. Logging-disabled checks
+still update it, and cleanup retains it. Accumulation begins with the first
+recorded check after this feature is installed; there is no historical backfill
+or recount on restart. Empty state reports zero and no started period. Corrupt
+or unknown-version state produces an error rather than invented totals.
+A counter write failure preserves the original Allow/Ask/Deny and reports a
+warning on check's stderr; a failing check retains its error and adds the
+statistics diagnostic. Such checks are missing from the recorded totals until
+the storage problem is fixed; they are never replayed automatically.
+
 When `audit.enabled` is true, `aar check` also writes events to
 `<state-dir>/logs/reviews.sqlite`. Logging uses the same state directory as audit and grants;
 by default, the database is `~/.local/state/aar/logs/reviews.sqlite`.

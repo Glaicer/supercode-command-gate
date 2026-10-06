@@ -162,6 +162,7 @@ type Decision struct {
 	AssessorAttempts   int    `json:"-"`
 	PolicyProfile      string `json:"-"`
 	DurationMs         int64  `json:"-"`
+	StatsError         string `json:"-"`
 }
 
 const (
