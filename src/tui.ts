@@ -1,5 +1,6 @@
 import { Plugin } from "@opencode/plugin/tui";
 import { createSignal, untrack } from "solid-js";
+import type { UnavailableAlert } from "./unavailable.ts";
 import { Approvals } from "./rpc.ts";
 import { CLIENT_HEARTBEAT_MS, type PendingApproval } from "./approval.ts";
 import {
@@ -19,6 +20,8 @@ export default Plugin.define({
     let showing = false;
     let syncing = false;
     let active: string | null = null;
+    let activeAlert: UnavailableAlert | null = null;
+    const alerted = new Set<string>();
     let clearReady = false;
     let diagnostic: string | null = null;
     const seen = new Set<string>();
@@ -181,6 +184,36 @@ export default Plugin.define({
             variant: "warning",
           });
         diagnostic = message;
+        const route = ctx.ui.router.current();
+        const alerts =
+          route.type === "session"
+            ? ((await rpc.alerts({
+                sessionID: route.sessionID,
+              })) as UnavailableAlert[])
+            : [];
+        if (
+          activeAlert &&
+          (route.type !== "session" ||
+            activeAlert.sessionID !== route.sessionID)
+        )
+          ctx.ui.dialog.clear();
+        if (!showing) {
+          const item = alerts.find((item) => !alerted.has(item.id));
+          if (item) {
+            showing = true;
+            activeAlert = item;
+            alerted.add(item.id);
+            void ctx.ui.dialog
+              .alert({
+                title: "Command Gate unavailable",
+                message: `${item.reason}. The command was not executed. This is an operational failure; the command was not proven dangerous.`,
+              })
+              .finally(() => {
+                activeAlert = null;
+                showing = false;
+              });
+          }
+        }
         const pending = (await rpc.list({ clientID })) as PendingApproval[];
         if (active && !pending.some((item) => item.pendingID === active))
           ctx.ui.dialog.clear();
@@ -190,7 +223,7 @@ export default Plugin.define({
         }
       } catch (error) {
         if (!disposed) unavailable(error);
-        if (active) ctx.ui.dialog.clear();
+        if (active || activeAlert) ctx.ui.dialog.clear();
       } finally {
         syncing = false;
       }
@@ -289,7 +322,7 @@ export default Plugin.define({
       clearInterval(heartbeat);
       stopSlot();
       stop();
-      if (active) ctx.ui.dialog.clear();
+      if (active || activeAlert) ctx.ui.dialog.clear();
       void rpc.disconnect({ clientID }).catch(() => {});
     };
   },

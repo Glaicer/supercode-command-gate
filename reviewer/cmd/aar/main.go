@@ -22,7 +22,7 @@ func main() {
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: aar check | aar doctor | aar cleanup | aar trust-reset --project <directory> | aar explain --audit-id <id> | aar grant --session <id> --fingerprint <fp> --scope once|session | aar deny-note --session <id> --fingerprint <fp> | aar session-event --session <id> --event end|clear|new-intent|goal-change")
+		return errors.New("usage: aar check | aar doctor | aar stats | aar cleanup | aar trust-reset --project <directory> | aar explain --audit-id <id> | aar grant --session <id> --fingerprint <fp> --scope once|session | aar deny-note --session <id> --fingerprint <fp> | aar session-event --session <id> --event end|clear|new-intent|goal-change")
 	}
 	if args[0] == "--version" || args[0] == "version" {
 		if len(args) != 1 {
@@ -49,6 +49,21 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return err
 		}
 		return writeStatus(stdout, map[string]string{"status": "reset"})
+	}
+	if args[0] == "stats" {
+		if len(args) != 1 {
+			return errors.New("usage: aar stats")
+		}
+		stats, err := reviewer.Stats(reviewer.Options{StateDir: os.Getenv("AAR_STATE_DIR")})
+		if err != nil {
+			return err
+		}
+		period := stats.StartedAt
+		if period == "" {
+			period = "not started"
+		}
+		_, err = fmt.Fprintf(stdout, "Reviewer statistics (since %s)\nProcessed: %d\nApproved by policy: %d\nApproved by LLM: %d (fresh: %d, reused: %d)\nApproved by human: %d\nDenied: %d\nAsk: %d\nErrors: %d\nReviewer outcomes only; repeated checks count again. Ask remains Ask under Gate never-ask; execution and native permissions are not counted.\n", period, stats.Processed, stats.Policy, stats.LLMFresh+stats.LLMReused, stats.LLMFresh, stats.LLMReused, stats.Human, stats.Denied, stats.Ask, stats.Errors)
+		return err
 	}
 	if args[0] == "cleanup" {
 		if len(args) != 1 {
@@ -139,6 +154,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	decision, err := reviewer.Check(request, reviewer.Options{StateDir: os.Getenv("AAR_STATE_DIR")})
 	if err != nil {
 		return err
+	}
+	if decision.StatsError != "" {
+		fmt.Fprintln(stderr, decision.StatsError)
 	}
 	payload, err := json.Marshal(decision)
 	if err != nil {

@@ -218,7 +218,7 @@ type inspectingLogModelCall struct {
 
 func (call inspectingLogModelCall) Call(_ context.Context, _ reviewer.ModelCallRequest) (string, error) {
 	records := readReviewLog(call.t, call.dir)
-	if len(records) != 4 || records[0]["event"] != "received" || records[3]["event"] != "assessor-call" {
+	if len(records) < 4 || records[0]["event"] != "received" || records[len(records)-1]["event"] != "assessor-call" {
 		call.t.Fatalf("events not committed before model call: %#v", records)
 	}
 	return `{"risks":[],"uncertainties":[]}`, nil
