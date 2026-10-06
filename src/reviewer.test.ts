@@ -74,7 +74,7 @@ test("invalid decisions are rejected, so a malformed reply can never authorize",
     ["reviewer emitted no reason", { reason: " " }],
     ["reviewer emitted invalid source", { source: "vibes" }],
     [
-      "allow decisions must come from auto-allow, grant, or assessor",
+      "allow decisions must come from auto-allow, grant, assessor, or reviewed-trust",
       { source: "unavailable" },
     ],
     [
@@ -154,4 +154,37 @@ test("doctor reports are validated against the preserved contract versions", () 
     assert.match(tooFast.reason, /greater than the reviewer deadline/);
   assert.equal(normalizeDoctorResult([], 5500).ok, false);
   assert.equal(normalizeDoctorResult(null, 5500).ok, false);
+});
+
+test("reviewed trust authorizes only an allow linked to its original audit", () => {
+  assert.equal(
+    validateDecision(
+      decision({
+        source: "reviewed-trust",
+        rule: null,
+        originAuditId: "a".repeat(32),
+      }),
+      request,
+    ).source,
+    "reviewed-trust",
+  );
+  for (const overrides of [
+    { originAuditId: undefined },
+    { originAuditId: "invalid" },
+    { decision: "ask" },
+  ]) {
+    assert.throws(
+      () =>
+        validateDecision(
+          decision({
+            source: "reviewed-trust",
+            rule: null,
+            originAuditId: "a".repeat(32),
+            ...overrides,
+          }),
+          request,
+        ),
+      /reviewed-trust requires allow/,
+    );
+  }
 });

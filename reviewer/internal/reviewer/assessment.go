@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -336,6 +337,18 @@ func buildModelCallRequest(request Request, ir ShellIR, options Options, config 
 	contextCapsule.ProtectedPaths = append([]string{}, evaluator.protected...)
 	contextCapsule.TemporaryDirectory = evaluator.tempRoot
 	scripts := collectScriptEvidence(request, ir, config.Assessor)
+	launch, launchReason := developmentLaunchFor(request, config)
+	scripts.Evidence = append(scripts.Evidence, launch.Evidence...)
+	if launchReason == "" {
+		facts, _ := json.Marshal(map[string]any{"workingPackage": launch.Project, "launchInputs": launch.Inputs})
+		scripts.Evidence = append(scripts.Evidence, scriptEvidence{Kind: "development-launch", Status: scriptStatusComplete, Content: string(facts), Digest: digestScript(string(facts))})
+	}
+	if len(launch.Evidence) != 0 {
+		_, snapshot, err := readScriptSnapshot(filepath.Join(request.CWD, "package.json"))
+		if err == nil {
+			scripts.Snapshots = append(scripts.Snapshots, snapshot)
+		}
+	}
 	pathFacts := make([]pathFact, 0, len(ir.PathCandidates))
 	local := localAssessmentContext{
 		Snapshots: append([]scriptSnapshot(nil), scripts.Snapshots...),
@@ -424,7 +437,7 @@ func buildModelCallRequest(request Request, ir ShellIR, options Options, config 
 
 func trustedEnvSnapshot(env map[string]string) map[string]string {
 	snapshot := map[string]string{}
-	for _, key := range []string{"HOME", "PWD", "CDPATH", "SystemRoot", "USERPROFILE"} {
+	for _, key := range []string{"PATH", "HOME", "PWD", "CDPATH", "SystemRoot", "USERPROFILE"} {
 		if value, ok := env[key]; ok {
 			snapshot[key] = value
 		}

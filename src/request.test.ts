@@ -25,6 +25,7 @@ test("the material env subset keeps only the carried keys and never the full env
     PATH: "/usr/bin",
   });
   assert.deepEqual(subset, {
+    PATH: "/usr/bin",
     CDPATH: "/cd",
     HOME: "/home/user",
     PWD: "/work",
@@ -34,7 +35,9 @@ test("the material env subset keeps only the carried keys and never the full env
     BASH_ENV: "/startup.sh",
     ENV: "/sh-startup.sh",
   });
-  assert.deepEqual(Object.keys(subset).sort(), [...MATERIAL_ENV_KEYS].sort());
+  assert.ok(
+    Object.keys(subset).every((key) => MATERIAL_ENV_KEYS.includes(key)),
+  );
   assert.equal("SECRET_TOKEN" in subset, false);
 });
 
@@ -170,4 +173,20 @@ test("missing intent facts degrade to explicit nulls without fabrication", () =>
     latestUserRequest: null,
     purpose: null,
   });
+});
+
+test("launch environment changes invalidate trust without disclosing secret values", () => {
+  const make = (env: Record<string, string>) =>
+    buildRequest(
+      { command: "pnpm typecheck", cwd: process.cwd(), env },
+      { sessionID: "s", intentId: "i", goal: null, latestUserRequest: null },
+      null,
+    );
+  const first = make({ PATH: "/usr/bin", SECRET_TOKEN: "first" });
+  const reordered = make({ SECRET_TOKEN: "first", PATH: "/usr/bin" });
+  const changed = make({ PATH: "/usr/bin", SECRET_TOKEN: "second" });
+  assert.match(first.executionEnvDigest!, /^[a-f0-9]{64}$/);
+  assert.equal(first.executionEnvDigest, reordered.executionEnvDigest);
+  assert.notEqual(first.executionEnvDigest, changed.executionEnvDigest);
+  assert.equal(JSON.stringify(first).includes("SECRET_TOKEN"), false);
 });

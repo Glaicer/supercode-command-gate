@@ -2,6 +2,26 @@
 
 Native Bash review for OpenCode **2.0.22**, using the separate `aar` Command Reviewer. The **1.0.0** breaking release line is V2-only; the historical Gate **0.1.0** remains V1-only. No dual-API factory or runtime emulation is shipped. Release acceptance remains incomplete until the genuine human TUI smoke passes.
 
+## Security limitations
+
+**AAR is a safeguard against agent mistakes, not a security boundary against a deliberately harmful agent.** It reviews command safety, but does not verify the safety of executable files, package scripts or their dependencies. It may inspect some script sources as evidence; this is not a comprehensive security audit, and an `allow` decision does not guarantee that the executed code is safe.
+
+An agent deliberately attempting destructive actions is likely to succeed, for example by placing harmful code in a file and running it through an otherwise ordinary command. AAR does not sandbox execution or restrict the launched process's filesystem and network access. Execution isolation, such as bubblewrap (`bwrap`), is a separate protection layer and is outside this project's scope.
+
+Successful Assessor Allow for a supported development launch may be reused across sessions in the **same canonical working package** (`reviewed-trust`), separately from human grants. This is an optimization of the safeguard above. Ordinary source and test edits intentionally preserve this trust; it does not prove executable code safe. Only assessments with no risks or uncertainties are recorded. Human approval, Ask, Deny, unavailable Assessor and passthrough never populate it.
+
+The first slice supports `npm run <script>`, `npm test`, `pnpm [run] <script>`, `pnpm exec <tool> …`, and explicit `./node_modules/.bin/<tool> …`: TypeScript `tsc --noEmit`, ESLint without fixes, Prettier `--check`, `vitest run`, and `playwright test`. Static single-command package script chains and applicable pre/post scripts are disclosed to the Assessor. Script names never produce an initial Allow. Only supported static arguments are eligible; install/publish/dev commands, shell composition, workspace selectors/inherited packages, alternate config flags, executable or indirect tool configurations, custom Node startup, manager hook files and unknown actions take the ordinary review path. Workspace roots different from the working package are currently unsupported. No per-node shell reuse occurs.
+
+Every lookup checks current Hard Deny and whole-program policy before reuse, and Gate still applies native permissions. Exact command bytes, canonical cwd, scripts/hooks and manifest, lockfiles and installed manager metadata, local selected executable bytes and resolved paths, Node/package-manager executable bytes, root configuration/ignore files and their existence, manager rc inputs, and Reviewer policy/semantics participate in invalidation. The Gate includes PATH and supported runtime override indicators as secret-safe evidence; a SHA-256 digest of the complete invocation environment catches changes to undisclosed settings without forwarding their values. Requests lacking that digest or PATH/HOME are reviewed normally. Config references/imports, executable configs, parent package/tool configs and dynamic manager overrides remain unsupported until their resolution is implemented.
+
+Trust lives under the Reviewer state directory in `reviewed-trust/`, as atomic versioned files with per-project locking, at most 256 entries per project, and a 30-day lifetime. Hits carry `originAuditId`; audit/review events distinguish hits, new saves and misses (including changed/reset/expired/invalid inputs). Missing, corrupt or unknown-version records never authorize. To reset the current project's persistent trust without changing human grants, use the same Reviewer state/config environment as Gate:
+
+```sh
+aar trust-reset --project /absolute/path/to/project
+```
+
+Reset is scoped to that canonical working directory and prevents a review already in flight from restoring the previous generation. Different worktrees and projects never share trust.
+
 ## Approval
 
 **Approval mode.** The server option `approvalMode` defaults to **`never-ask`**: every Reviewer `ask` is deterministically denied as a policy refusal — no pending request is created, no adapter is awaited and no dialog opens, with or without a connected TUI. The model-visible tool error carries the original Reviewer reason, the readable risks/uncertainties and the fixed explanation "Human approval is required by Reviewer policy, but prompts are disabled. The command was not executed." Ask-to-Deny is a policy refusal, never an operational failure: neither `onReviewerFailure: "passthrough"` nor a connected approval client can bypass it, and no severity threshold, implicit approval or automatic grant exists. The human approval flow described below is opt-in via the explicit `"approvalMode": "interactive"` server option — the mode for users who want **Allow once** or **Trust exact for session**:

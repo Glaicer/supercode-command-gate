@@ -4,13 +4,14 @@ import "context"
 
 // Request is the versioned stdin contract for `aar check`.
 type Request struct {
-	SchemaVersion string            `json:"schemaVersion"`
-	Command       string            `json:"command"`
-	CWD           string            `json:"cwd"`
-	WorkspaceRoot *string           `json:"workspaceRoot"`
-	Env           map[string]string `json:"env"`
-	Session       Session           `json:"session"`
-	Intent        Intent            `json:"intent"`
+	SchemaVersion      string            `json:"schemaVersion"`
+	ExecutionEnvDigest string            `json:"executionEnvDigest,omitempty"`
+	Command            string            `json:"command"`
+	CWD                string            `json:"cwd"`
+	WorkspaceRoot      *string           `json:"workspaceRoot"`
+	Env                map[string]string `json:"env"`
+	Session            Session           `json:"session"`
+	Intent             Intent            `json:"intent"`
 }
 
 type Session struct {
@@ -152,6 +153,7 @@ type Decision struct {
 	GrantEligible          bool    `json:"grantEligible"`
 	GrantScope             string  `json:"grantScope,omitempty"`
 	AuditID                string  `json:"auditId"`
+	OriginAuditID          string  `json:"originAuditId,omitempty"`
 
 	// Dynamic is an internal observation used by callers and tests. It never
 	// crosses the aar-decision-v1 wire contract.
@@ -179,12 +181,13 @@ const (
 	GrantScopeOnce    = "once"
 	GrantScopeSession = "session"
 
-	SourceHardDeny    = "hard-deny"
-	SourceAutoAllow   = "auto-allow"
-	SourceGrant       = "grant"
-	SourceAssessor    = "assessor"
-	SourceUnavailable = "unavailable"
-	SourceDenyNote    = "deny-note"
+	SourceHardDeny      = "hard-deny"
+	SourceAutoAllow     = "auto-allow"
+	SourceGrant         = "grant"
+	SourceAssessor      = "assessor"
+	SourceReviewedTrust = "reviewed-trust"
+	SourceUnavailable   = "unavailable"
+	SourceDenyNote      = "deny-note"
 )
 
 const (

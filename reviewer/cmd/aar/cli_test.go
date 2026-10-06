@@ -321,3 +321,27 @@ func mustRead(t *testing.T, path string) []byte {
 	}
 	return contents
 }
+
+func TestCLITrustResetIsProjectScopedAndValidatesArguments(t *testing.T) {
+	t.Setenv("AAR_STATE_DIR", t.TempDir())
+	config := filepath.Join(t.TempDir(), "empty.toml")
+	if err := os.WriteFile(config, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AAR_CONFIG", config)
+	root := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"trust-reset", "--project", root}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(stdout.String()) != `{"status":"reset"}` {
+		t.Fatalf("stdout=%s", stdout.String())
+	}
+	files, err := filepath.Glob(filepath.Join(os.Getenv("AAR_STATE_DIR"), "reviewed-trust", "*.json"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("state=%v err=%v", files, err)
+	}
+	if err := run([]string{"trust-reset"}, strings.NewReader(""), &stdout, &stderr); err == nil {
+		t.Fatal("missing project accepted")
+	}
+}
