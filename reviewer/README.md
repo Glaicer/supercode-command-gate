@@ -142,3 +142,73 @@ field identify `primary` and `fallback[0]`, `fallback[1]`, etc., including ident
 model IDs, without exposing endpoints or keys. Doctor succeeds when at least
 one configured connection has an available credential, so a missing primary
 key does not prevent a usable fallback. Structural errors always fail validation.
+
+## Codex ChatGPT subscription authentication
+
+The Assessor can use ChatGPT sign-in credentials from the **Codex** file format:
+
+```toml
+[assessor]
+model = "gpt-6-luna"
+authMode = "codex"
+authJsonPath = "/absolute/path/to/.codex/auth.json"
+totalTimeoutMs = 20000
+options = { reasoning = { effort = "none" } }
+```
+
+This mode is separate from `authMode = "api-key"` (the default) and paid OpenAI
+API billing. ChatGPT/Codex entitlement, available models and usage limits depend
+on the account; Plus does not provide every API model or unlimited access.
+[Official authentication documentation](https://learn.chatgpt.com/docs/auth)
+describes Codex file/keyring storage and owner-managed token refresh.
+[Model availability](https://learn.chatgpt.com/docs/changelog) describes the
+GPT-6 Luna rollout; a locally readable token cannot prove model entitlement.
+
+Supported first format: Codex `auth.json`, with optional `auth_mode = "chatgpt"`,
+`tokens.access_token` as a JWT containing `exp`, and `tokens.account_id`.
+`tokens.id_token`, `tokens.refresh_token`, `last_refresh` and unrelated entries
+may exist. OpenCode's provider-keyed OAuth JSON, API-key files, keyrings and
+other Codex auth modes are unsupported. Use an explicitly configured absolute
+path to a private regular file (0600, maximum 1 MiB); there is no automatic
+credential search or copying. JWT expiry is a local readiness hint; the server
+verifies credentials and account/model access.
+
+AAR reads the owner file afresh on every attempt. It never writes credentials,
+rotates refresh tokens, calls the OAuth refresh endpoint or starts login. Codex
+owns refresh: when expired/revoked, refresh or sign in with Codex and retry.
+Updated owner files are reloaded even between authentication retries. Parallel
+AAR processes only read the file, avoiding competing refresh-token rotation;
+an incomplete owner write fails closed and can be retried after it completes.
+`aar doctor` validates local format/expiry/permissions without any network call;
+remote revocation, entitlement and usage limits can only be established by a
+provider request. Diagnostics describe these cases without tokens or account IDs.
+
+Subscription requests go only to
+`https://chatgpt.com/backend-api/codex/responses`; redirects are rejected.
+Configuration of `baseUrl`, `apiKeyEnv` or independent API `fallbacks` in this
+mode is rejected, so OAuth credentials cannot reach another host and no paid API
+fallback occurs. Explicit `fallbackModels` stay on the subscription transport.
+Project overlays keep the existing scalar inheritance rules; when switching modes,
+explicitly clear incompatible inherited fields (for example `baseUrl = ""`,
+`apiKeyEnv = ""`, `fallbacks = []`, or `authJsonPath = ""` for API-key mode).
+Only subscription `options.reasoning`, `options.text`, and `options.service_tier`
+are accepted; state, tools and saved-prompt options are rejected. Each request
+has complete Assessor evidence, no history/previous response, no tools, and
+`store = false`; SSE text is accepted only after a completed response and then
+validated by the existing RiskAssessment parser and local policy mapper.
+The existing deadline and retry budget applies. Authentication, limit and stream
+failures use `onUnavailable`; an expired/failed response cannot authorize a command.
+Provider errors are sanitized, and reflected credential material is refused
+before reaching audit or trace.
+
+Compatibility was checked against
+[Codex source revision 551bd409](https://github.com/openai/codex/tree/551bd409ebf03fc6ea0dcad0915368d8a493f012/codex-rs):
+`login/src/auth/storage.rs` and `login/src/token_data.rs` define the credential
+format, `login/src/auth/manager.rs` defines bearer/owner-refresh handling, and
+`model-provider-info/src/lib.rs` plus `codex-api/src/endpoint/responses.rs`
+define the subscription origin and Responses stream transport. On 2026-10-06,
+an explicitly authorized minimal live probe with read-only Codex credentials
+and exact model `gpt-6-luna` returned a locally validated RiskAssessment through
+this subscription transport. No credentials were changed and no paid API was used.
+This confirms the tested account/model at that time; other account entitlements
+and future transport changes remain provider-controlled.

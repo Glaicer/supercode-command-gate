@@ -24,7 +24,7 @@ Reset is scoped to that canonical working directory and prevents a review alread
 
 ## Approval
 
-**Approval mode.** The server option `approvalMode` defaults to **`never-ask`**: every Reviewer `ask` is deterministically denied as a policy refusal — no pending request is created, no adapter is awaited and no dialog opens, with or without a connected TUI. The model-visible tool error carries the original Reviewer reason, the readable risks/uncertainties and the fixed explanation "Human approval is required by Reviewer policy, but prompts are disabled. The command was not executed." Ask-to-Deny is a policy refusal, never an operational failure: neither `onReviewerFailure: "passthrough"` nor a connected approval client can bypass it, and no severity threshold, implicit approval or automatic grant exists. The human approval flow described below is opt-in via the explicit `"approvalMode": "interactive"` server option — the mode for users who want **Allow once** or **Trust exact for session**:
+**Approval mode.** The server option `approvalMode` defaults to **`never-ask`**: every policy Reviewer `ask` is deterministically denied as a policy refusal — no pending request is created, no adapter is awaited and no approval dialog opens, with or without a connected TUI. The model-visible tool error carries the original Reviewer reason, the readable risks/uncertainties and the fixed explanation "Human approval is required by Reviewer policy, but prompts are disabled. The command was not executed." Policy Ask-to-Deny is a policy refusal, never an operational failure: neither `onReviewerFailure: "passthrough"` nor a connected approval client can bypass it, and no severity threshold, implicit approval or automatic grant exists. The human approval flow described below is opt-in via the explicit `"approvalMode": "interactive"` server option — the mode for users who want **Allow once** or **Trust exact for session**:
 
 ```jsonc
 {
@@ -450,6 +450,21 @@ Reviewer reservation expiry still applies: a response arriving before the human 
 The default `onReviewerFailure: "deny"` keeps interception loaded when doctor is unhealthy or the binary is missing/incompatible. Invalid options always deny. Explicit `"passthrough"` permits operational Reviewer failures only, labelled **UNREVIEWED** in server diagnostics and a TUI warning fetched through public status RPC. Reviewer deny/ask (including never-ask Ask-to-Deny), stale context, failed approval/grant, native deny, unsupported Bash/background invocation and invalid configuration never become passthrough.
 
 Gate-owned Reviewer and RTK operations are deadline-bound. On cancellation/deadline, POSIX subprocess groups receive SIGKILL (including descendants); the Effect finalizer joins subprocess close before releasing review state. Native command execution and its supervision remain entirely with OpenCode. Unload interrupts the wrapped native Effect, including pre-spawn permission waits; any already-running native process is cancelled by host supervision, never by a Gate spawner. Pending human waits remove timers/abort listeners on every terminal response, and plugin unload closes them and signals outstanding reviews. Captured old tool wrappers refuse after unload instead of executing without their removed shell hook. Restart/reload still resets persisted trust before first review.
+
+A blocked operational failure also opens a dismissible **Command Gate unavailable**
+alert in the connected TUI for the owning session/location. It distinguishes a
+Reviewer/transport failure from **Command Risk Assessor unavailable** and shows
+only safe diagnostic labels. The command was not executed; closing this alert
+records no approval, creates no grant and leaves the policy unchanged. Ordinary
+policy refusals and human cancellation do not open this alert. Explicit
+passthrough execution keeps its existing UNREVIEWED diagnostic.
+
+Repeated failures of the same component in the same session share one outage
+alert. A validated Reviewer reply confirms Reviewer recovery. Only a validated
+Assessor result confirms Assessor recovery; auto-allow or a grant does not.
+After that recovery a new outage can open a new alert. The existing RPC heartbeat
+and notifications carry this state; no extra model calls or health polling are
+added. Without a TUI the operational tool error still blocks immediately.
 
 **Accepted fail-open gap:** an absent, disabled or failed-to-load plugin cannot intercept native commands. Inventory alone does not prove protection; inspect doctor/operational diagnostics. This is distinct from a loaded-but-unhealthy Gate, which denies by default.
 

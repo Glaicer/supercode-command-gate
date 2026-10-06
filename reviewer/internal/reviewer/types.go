@@ -54,6 +54,8 @@ type Config struct {
 }
 
 type AssessorConfig struct {
+	AuthMode       string
+	AuthJSONPath   string
 	Model          string
 	FallbackModels []string
 	Fallbacks      []AssessorConnection
@@ -72,6 +74,8 @@ type AssessorConfig struct {
 }
 
 type AssessorConnection struct {
+	AuthMode      string
+	AuthJSONPath  string
 	Model         string
 	BaseURL       string
 	APIKeyEnv     string
