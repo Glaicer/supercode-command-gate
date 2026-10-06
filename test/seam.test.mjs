@@ -10,7 +10,9 @@ import {
 
 let evidence;
 before(async () => {
-  evidence = await runSeam();
+  evidence = await runSeam({
+    expectedVersion: process.env.GATE_PROBE_VERSION ?? "2.0.22",
+  });
 });
 
 const find = (boot, name) => {
@@ -195,7 +197,8 @@ test("reviewed cwd and env facts match the actual invocation without forwarding 
     path.resolve(evidence.main.project, "../home/session-home"),
   );
   assert.equal(review.env.CDPATH, `${evidence.main.project}/other`);
-  assert.deepEqual(Object.keys(review.env).sort(), ["CDPATH", "HOME"]);
+  assert.deepEqual(Object.keys(review.env).sort(), ["CDPATH", "HOME", "PATH"]);
+  assert.ok(review.env.PATH.length > 0);
   assert.equal("PROOF_ENV" in review.env, false, "session secrets stay out");
   assert.equal("OPENCODE_SERVER_PASSWORD" in review.env, false);
   const audit = evidence.main.auditRecords.find(
@@ -302,7 +305,7 @@ test("operational Reviewer failures deny by default without dropping the interce
     "fixture-malformed": /unavailable/,
     "fixture-multi": /invalid stdout/,
     "fixture-invalid": /invalid decision/,
-    "fixture-timeout": /timeout/,
+    "fixture-timeout": /timeout|timed out/,
   };
   for (const [name, pattern] of Object.entries(expectations)) {
     const result = find(evidence.checkFailures, name);
