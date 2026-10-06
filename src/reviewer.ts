@@ -40,6 +40,12 @@ export type Decision = {
   grantScope?: string;
   auditId: string;
   originAuditId?: string;
+  reviewedCoverage?: Array<{
+    commandIndex: number;
+    source: "auto-allow" | "reviewed-trust";
+    rule?: string;
+    originAuditId?: string;
+  }>;
 };
 
 export type DoctorReport = {
@@ -448,6 +454,42 @@ export function validateDecision(
       !/^[a-f0-9]{32}$/.test(value.originAuditId))
   )
     throw new Error("reviewed-trust requires allow and an origin audit id");
+  if (value.reviewedCoverage !== undefined) {
+    const coverage = value.reviewedCoverage;
+    const indexes = new Set<number>();
+    if (
+      value.source !== "reviewed-trust" ||
+      !Array.isArray(coverage) ||
+      coverage.length === 0
+    )
+      throw new Error("invalid reviewed composition provenance");
+    let hasOrigin = false;
+    for (const node of coverage) {
+      if (
+        !node ||
+        typeof node !== "object" ||
+        !Number.isInteger(node.commandIndex) ||
+        node.commandIndex < 0 ||
+        indexes.has(node.commandIndex)
+      )
+        throw new Error("invalid reviewed composition provenance");
+      indexes.add(node.commandIndex);
+      if (node.source === "reviewed-trust") {
+        if (
+          typeof node.originAuditId !== "string" ||
+          !/^[a-f0-9]{32}$/.test(node.originAuditId)
+        )
+          throw new Error("invalid reviewed composition provenance");
+        hasOrigin ||= node.originAuditId === value.originAuditId;
+      } else if (
+        node.source !== "auto-allow" ||
+        typeof node.rule !== "string" ||
+        node.rule.trim() === ""
+      )
+        throw new Error("invalid reviewed composition provenance");
+    }
+    if (!hasOrigin) throw new Error("invalid reviewed composition provenance");
+  }
   if (value.source === "grant" && value.decision !== "allow")
     throw new Error("grant source requires an allow decision");
   if (value.source === "deny-note" && value.decision !== "deny")
