@@ -16,10 +16,24 @@ test("the material env subset keeps only the carried keys and never the full env
     HOME: "/home/user",
     PWD: "/work",
     CDPATH: "/cd",
+    BASHOPTS: "dotglob",
+    SHELLOPTS: "noglob",
+    GLOBIGNORE: "ignored",
+    BASH_ENV: "/startup.sh",
+    ENV: "/sh-startup.sh",
     SECRET_TOKEN: "do-not-forward",
     PATH: "/usr/bin",
   });
-  assert.deepEqual(subset, { CDPATH: "/cd", HOME: "/home/user", PWD: "/work" });
+  assert.deepEqual(subset, {
+    CDPATH: "/cd",
+    HOME: "/home/user",
+    PWD: "/work",
+    BASHOPTS: "dotglob",
+    SHELLOPTS: "noglob",
+    GLOBIGNORE: "ignored",
+    BASH_ENV: "/startup.sh",
+    ENV: "/sh-startup.sh",
+  });
   assert.deepEqual(Object.keys(subset).sort(), [...MATERIAL_ENV_KEYS].sort());
   assert.equal("SECRET_TOKEN" in subset, false);
 });

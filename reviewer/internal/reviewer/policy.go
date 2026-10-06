@@ -23,7 +23,7 @@ type policyState struct {
 }
 
 func evaluateAutoAllow(request Request, ir ShellIR, options Options) (rule, reason string, ok bool) {
-	if ir.ParseError != "" || ir.Dynamic || len(ir.Executions) == 0 {
+	if ir.ParseError != "" || ir.Dynamic && !onlyPathExpansions(ir.DynamicFeatures) || len(ir.Executions) == 0 {
 		return "", "", false
 	}
 	evaluator := newPolicyEvaluator(request, options)
@@ -62,9 +62,6 @@ func newPolicyEvaluator(request Request, options Options) policyEvaluator {
 }
 
 func (e *policyEvaluator) evaluateExecution(ir ShellIR, execution IRExecution, state policyState, pipelineInput bool) (bool, policyState) {
-	if execution.Dynamic {
-		return false, state
-	}
 	switch execution.Kind {
 	case "command":
 		if execution.CommandIndex < 0 || execution.CommandIndex >= len(ir.Commands) {
@@ -106,6 +103,14 @@ func (e *policyEvaluator) evaluateExecution(ir ShellIR, execution IRExecution, s
 }
 
 func (e *policyEvaluator) commandSafe(command IRCommand, state policyState, stdinSafe bool) (bool, policyState) {
+	expanded := !command.Static
+	if expanded {
+		var ok bool
+		command, ok = e.expandReadCommand(command, state.cwd)
+		if !ok {
+			return false, state
+		}
+	}
 	if !command.Static || command.Name == "" || len(command.ArgumentFacts) == 0 {
 		return false, state
 	}
@@ -115,7 +120,7 @@ func (e *policyEvaluator) commandSafe(command IRCommand, state policyState, stdi
 		}
 	}
 
-	if e.matchesAddition(command, state.cwd) {
+	if !expanded && e.matchesAddition(command, state.cwd) {
 		e.additionUsed = true
 		return true, state
 	}
@@ -202,6 +207,7 @@ type optionGrammar struct {
 	flags        map[string]bool
 	reject       map[string]bool
 	allowUnknown bool
+	numericCount bool
 }
 
 var (
@@ -213,6 +219,7 @@ var (
 		allowUnknown: false,
 	}
 	headTailOptions = optionGrammar{
+		numericCount: true,
 		values:       map[string]bool{"-n": true, "--lines": true, "--lines=": true, "-c": true, "--bytes": true, "--bytes=": true},
 		flags:        map[string]bool{"-q": true, "--quiet": true, "-v": true, "--verbose": true},
 		allowUnknown: false,
@@ -282,6 +289,12 @@ func parseOptionOperands(args []string, grammar optionGrammar) ([]string, bool) 
 		if grammar.flags[arg] {
 			continue
 		}
+		if grammar.numericCount && len(arg) > 1 && strings.Trim(arg[1:], "0123456789") == "" {
+			continue
+		}
+		if grammar.numericCount && strings.HasPrefix(arg, "--") && !grammar.values[arg] && !hasOptionPrefix(grammar.values, arg) {
+			return nil, false
+		}
 		if grammar.values[arg] {
 			if index+1 >= len(args) {
 				return nil, false
@@ -296,7 +309,7 @@ func parseOptionOperands(args []string, grammar optionGrammar) ([]string, bool) 
 			continue
 		}
 		// The small, argument-free GNU/POSIX flag set used by these readers.
-		if isCommonReadFlag(arg) {
+		if isCommonReadFlag(arg) && (!grammar.numericCount || strings.Trim(arg[1:], "qv") == "") {
 			continue
 		}
 		return nil, false
@@ -1013,6 +1026,12 @@ func (e *policyEvaluator) redirectionsSafe(ir ShellIR, indexes []int, cwd string
 		redirection := ir.Redirections[index]
 		if !redirection.Static || redirection.HereDocument || redirection.Target == "" {
 			return false, false
+		}
+		if redirection.Operator == ">&" {
+			if (redirection.FD != "" && redirection.FD != "1" && redirection.FD != "2") || (redirection.Target != "1" && redirection.Target != "2") {
+				return false, false
+			}
+			continue
 		}
 		if redirection.WriteCapable {
 			if redirection.Target == "/dev/null" {

@@ -441,21 +441,28 @@ func (c *shellConverter) addRedirection(redirection *syntax.Redirect) int {
 	if hereDocument {
 		features = appendUnique(features, "heredoc")
 	}
-	if redirection.Op == syntax.DplIn || redirection.Op == syntax.DplOut {
+	fd := ""
+	if redirection.N != nil {
+		fd = redirection.N.Value
+	}
+	outputDuplication := redirection.Op == syntax.DplOut && (fd == "" || fd == "1" || fd == "2") && (fact.value == "1" || fact.value == "2")
+	if redirection.Op == syntax.DplIn || redirection.Op == syntax.DplOut && !outputDuplication {
 		features = appendUnique(features, "file-descriptor-duplication")
 	}
-	static := fact.static && !hereDocument && redirection.Op != syntax.DplIn && redirection.Op != syntax.DplOut
+	static := fact.static && !hereDocument && (redirection.Op != syntax.DplIn && redirection.Op != syntax.DplOut || outputDuplication)
 	for _, feature := range features {
 		if feature != "" {
 			c.markDynamic(feature)
 		}
 	}
 	accessMode := "read"
-	if writeCapable {
+	if outputDuplication {
+		accessMode = "stdout"
+	} else if writeCapable {
 		accessMode = "write"
 	}
 	c.ir.AccessModes = appendUnique(c.ir.AccessModes, accessMode)
-	if !hereDocument {
+	if !hereDocument && !outputDuplication {
 		c.ir.PathCandidates = append(c.ir.PathCandidates, IRPathCandidate{
 			Value:      fact.value,
 			Static:     fact.static,
@@ -463,10 +470,6 @@ func (c *shellConverter) addRedirection(redirection *syntax.Redirect) int {
 			AccessMode: accessMode,
 			Span:       fact.span,
 		})
-	}
-	fd := ""
-	if redirection.N != nil {
-		fd = redirection.N.Value
 	}
 	c.ir.Redirections = append(c.ir.Redirections, IRRedirection{
 		Operator:        redirection.Op.String(),

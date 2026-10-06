@@ -56,7 +56,16 @@ export function assistantRationaleFor(
   return rationale || null;
 }
 
-export const MATERIAL_ENV_KEYS = ["CDPATH", "HOME", "PWD"];
+export const MATERIAL_ENV_KEYS = [
+  "CDPATH",
+  "HOME",
+  "PWD",
+  "BASHOPTS",
+  "SHELLOPTS",
+  "GLOBIGNORE",
+  "BASH_ENV",
+  "ENV",
+];
 export const REQUEST_SCHEMA_VERSION = "aar-request-v1";
 
 export function canonicalDirectory(value: string): string {
