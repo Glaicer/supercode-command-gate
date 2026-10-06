@@ -198,6 +198,45 @@ Audit records classify outcomes as `deterministic`, `model`, `grant`, or
 `failure`, and include the selected profile, assessor attempt metadata, and
 redacted RiskAssessment evidence when one exists.
 
+Every `aar check` also writes events to `<state-dir>/logs/reviews.sqlite`.
+Logging is always enabled and uses the same state directory as audit and grants;
+by default, the database is `~/.local/state/aar/logs/reviews.sqlite`.
+The `review_events` table stores `id` (event order), `review_id` (groups one check),
+`recorded_at` (UTC), `event`, and `detail` (masked event fields as JSON).
+A check records `received` (command, cwd, session/intent),
+`parsed` (ShellIR, parse error, dynamic syntax, policy profile), and
+`policy-result` and `verdict` (allow/ask/deny, source, matched rule and reason).
+The final verdict links to the existing audit record via `auditId`.
+
+Commands requiring assessment additionally record `assessor-required`, every
+`assessor-call` and `assessor-response` (model, attempt, response or error),
+and `assessor-result` (validated risks, uncertainties, total attempts or failure).
+Automatic rules and exact grants do not call the LLM. Request/configuration
+errors are recorded as a verdict with an error instead of a decision. Events
+are committed individually as processing proceeds, so an interrupted check
+retains its completed stages even if no final verdict is available.
+
+Logs mask the same recognized secret patterns as audit; parsed command arguments
+are derived from the masked command, while top-level parse error and dynamic
+status come from the original parse. The database has mode `0600`, and newly
+created log directories have mode `0700`. Environment variables, API request headers and
+provider credentials are not logged. Failure to create/write a log fails the
+check rather than returning approval. SQLite uses WAL mode and a one-second
+busy timeout for concurrent checks.
+Log retention is manual. Existing JSONL files are left in place; new checks
+write only to SQLite.
+
+For example, inspect recent verdicts with an optional installed SQLite CLI:
+
+```sh
+sqlite3 ~/.local/state/aar/logs/reviews.sqlite \
+  "SELECT review_id, recorded_at, json_extract(detail, '$.decision'), json_extract(detail, '$.source'), json_extract(detail, '$.reason') FROM review_events WHERE event = 'verdict' ORDER BY id DESC LIMIT 20;"
+```
+
+The driver is pinned to [modernc.org/sqlite v1.60.1](https://pkg.go.dev/modernc.org/sqlite@v1.60.1), verified against the Go module registry.
+It embeds SQLite in pure Go, so the Reviewer needs no system SQLite
+installation and keeps `CGO_ENABLED=0` release builds.
+
 ## Shell compatibility
 
 The Reviewer always parses commands using Bash grammar; the request does not

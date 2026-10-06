@@ -40,19 +40,39 @@ type auditRecord struct {
 	Assessment         *RiskAssessment `json:"assessment,omitempty"`
 }
 
-// Check is a pure decision operation with one deliberate persistence effect:
-// it records a compact audit event. It never starts, shells out, or otherwise
-// evaluates the command in Request.Command.
-func Check(request Request, options Options) (Decision, error) {
+// Check records audit and review logs without executing Request.Command.
+func Check(request Request, options Options) (result Decision, resultErr error) {
 	started := time.Now()
-	if err := validateRequest(request); err != nil {
-		return Decision{}, err
+	config, configErr := resolveReviewerConfig(request, options)
+	logOptions := options
+	if configErr == nil && logOptions.StateDir == "" {
+		logOptions.StateDir = config.Audit.Dir
 	}
-	request.Env = cloneStringMap(request.Env)
-	config, err := resolveReviewerConfig(request, options)
+	log, err := newReviewLog(logOptions.StateDir)
 	if err != nil {
 		return Decision{}, err
 	}
+	defer func() {
+		log.record("verdict", map[string]any{
+			"decision": result.Decision, "source": result.Source, "rule": result.Rule,
+			"reason": result.Reason, "auditId": result.AuditID,
+			"durationMs": time.Since(started).Milliseconds(), "error": errorText(resultErr),
+		})
+		if err := log.close(); err != nil && resultErr == nil {
+			result, resultErr = Decision{}, err
+		}
+	}()
+	log.record("received", map[string]any{
+		"command": request.Command, "cwd": request.CWD,
+		"sessionId": request.Session.ID, "intentId": request.Session.IntentID,
+	})
+	if err := validateRequest(request); err != nil {
+		return Decision{}, err
+	}
+	if configErr != nil {
+		return Decision{}, configErr
+	}
+	request.Env = cloneStringMap(request.Env)
 	policyOptions := options
 	policyOptions.ProtectedPaths = append([]string(nil), config.Policy.ProtectedPaths...)
 	policyOptions.AutoAllowAdditions = append([]AutoAllowAddition(nil), config.Policy.AutoAllowAdditions...)
@@ -69,6 +89,11 @@ func Check(request Request, options Options) (Decision, error) {
 	}
 
 	ir := ParseShell(request.Command)
+	log.record("parsed", map[string]any{
+		"shellIR":    ParseShell(redact(request.Command)),
+		"parseError": ir.ParseError, "dynamic": ir.Dynamic,
+		"profile": config.Policy.Profile,
+	})
 	fingerprint := fingerprintFor(request)
 	decision := Decision{
 		SchemaVersion:      DecisionSchemaVersion,
@@ -116,7 +141,12 @@ func Check(request Request, options Options) (Decision, error) {
 				decision.GrantScope = grant.Scope
 				decision.GrantEligible = false
 			} else {
-				assessment, local, trace, assessorErr := assessCommand(request, ir, policyOptions, config)
+				log.record("assessor-required", map[string]any{"model": config.Assessor.Model})
+				assessment, local, trace, assessorErr := assessCommand(request, ir, policyOptions, config, log)
+				log.record("assessor-result", map[string]any{
+					"model": trace.Model, "attempts": trace.Attempts,
+					"assessment": redactedAssessment(assessment), "error": errorText(assessorErr),
+				})
 				decision.AssessorModel = trace.Model
 				decision.AssessorAttempts = trace.Attempts
 				if assessorErr != nil {
@@ -166,6 +196,12 @@ func Check(request Request, options Options) (Decision, error) {
 	}
 
 	decision.DurationMs = time.Since(started).Milliseconds()
+	log.record("policy-result", map[string]any{
+		"decision": decision.Decision, "source": decision.Source, "rule": decision.Rule,
+		"reason": decision.Reason, "profile": config.Policy.Profile,
+		"failureKind": decision.FailureKind, "grantScope": decision.GrantScope,
+		"grantEligible": decision.GrantEligible,
+	})
 	auditID, err := writeAudit(request, decision, policyOptions, config)
 	if err != nil {
 		return Decision{}, err

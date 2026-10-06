@@ -134,7 +134,7 @@ func MapRiskAssessment(assessment RiskAssessment, policy PolicyConfig) (decision
 	return result.Decision, result.Reason
 }
 
-func assessCommand(request Request, ir ShellIR, options Options, config Config) (RiskAssessment, localAssessmentContext, assessorTrace, error) {
+func assessCommand(request Request, ir ShellIR, options Options, config Config, log *reviewLog) (RiskAssessment, localAssessmentContext, assessorTrace, error) {
 	_, local := buildModelCallRequest(request, ir, options, config)
 	trace := assessorTrace{}
 	if config.Assessor.Model == "" {
@@ -193,7 +193,11 @@ func assessCommand(request Request, ir ShellIR, options Options, config Config) 
 			promptRequest.Model = model
 			trace.Model = model
 			trace.Attempts++
+			log.record("assessor-call", map[string]any{"model": model, "attempt": trace.Attempts})
 			response, err := modelCall.Call(ctx, cloneModelCallRequest(promptRequest))
+			log.record("assessor-response", map[string]any{
+				"model": model, "attempt": trace.Attempts, "response": response, "error": errorText(err),
+			})
 			if err != nil {
 				lastErr = err
 				lastFailureKind = AssessorFailureProvider
