@@ -262,3 +262,19 @@ func TestReviewedCompositionAuditAndTraceExposeNodeProvenanceWithoutLiterals(t *
 		t.Fatal("secret leaked into trace")
 	}
 }
+
+func TestReviewedCompositionUsageCountsOneVerdictPerWholeProgram(t *testing.T) {
+	req, opts, fake := reviewedChainFixture(t)
+	req.Command = "pnpm typecheck && pnpm lint"
+	decision, err := reviewer.Check(req, opts)
+	if err != nil || decision.Source != "reviewed-trust" {
+		t.Fatalf("%#v %v", decision, err)
+	}
+	stats, err := reviewer.Stats(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Processed != 3 || stats.LLMFresh != 2 || stats.LLMReused != 1 || stats.Policy != 0 || len(fake.requests) != 2 {
+		t.Fatalf("stats=%#v model calls=%d", stats, len(fake.requests))
+	}
+}
