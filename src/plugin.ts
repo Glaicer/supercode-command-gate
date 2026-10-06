@@ -154,6 +154,7 @@ export default Plugin.define({
   id: "command-gate",
   effect: (ctx) =>
     Effect.gen(function* () {
+      if (ctx.options.enabled === false) return;
       const config = resolveConfig(ctx.options);
       const state = new GateState();
       let active = true;

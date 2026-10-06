@@ -318,6 +318,7 @@ Native `plugin add` also registers the bare package in global `cli.json`. Server
 
 | Server option       | Default             | Explicit environment override      |
 | ------------------- | ------------------- | ---------------------------------- |
+| `enabled`           | `true`              | —                                  |
 | `binaryPath`        | `aar`               | `AAR_BINARY_PATH`                  |
 | `tools`             | `["bash", "shell"]` | `AAR_GATE_TOOLS` (comma-separated) |
 | `timeoutMs`         | `5500`              | `AAR_GATE_TIMEOUT_MS`              |
@@ -327,6 +328,25 @@ Native `plugin add` also registers the bare package in global `cli.json`. Server
 | `approvalMode`      | `never-ask`         | —                                  |
 
 Explicit package options take precedence over environment overrides. `approvalTimeoutMs` is a server-only option, default `600000`. There is no environment override for `approvalMode`; it accepts only `never-ask` and `interactive` (matched case-insensitively like the other enum options), and any other value is an invalid setting that denies — including invalid settings combined with passthrough.
+
+To disable Command Gate while keeping both registrations, use the same entry
+in the `plugins` array of **both** `opencode.jsonc` (or `opencode.json`) and
+`cli.json`:
+
+```jsonc
+{
+  "package": "@supercode/command-gate",
+  "options": { "enabled": false },
+}
+```
+
+`enabled` defaults to `true` and accepts only booleans. With `false`, the server
+skips doctor, Reviewer/RTK calls, hooks and RPC registration; the TUI skips
+commands, dialogs, timers and RPC connections. OpenCode still loads the package,
+but both halves do no work. TUI options must be set in `cli.json` because server
+inventory does not forward them. To re-enable, remove this option or set it to
+`true` in both files. As with other plugin options, a fresh location/service boot
+is required; changing configuration does not disable an already running instance.
 
 Use **Command Gate: health** in the palette, or `/gate-health`, for server doctor health/reason, failure mode, effective settings and approval-adapter availability. An active inventory item is only proof of loading, not successful review. Missing/incompatible Reviewer, explicit **UNREVIEWED** passthrough and unavailable approval adapter have separate diagnostics.
 

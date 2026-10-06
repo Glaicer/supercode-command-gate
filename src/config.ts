@@ -4,6 +4,7 @@ export const DEFAULT_TOOLS = ["bash", "shell"];
 export const DEFAULT_TIMEOUT_MS = 5500;
 
 export type GateConfig = {
+  enabled: boolean;
   binaryPath: string;
   tools: string[];
   timeoutMs: number;
@@ -47,6 +48,8 @@ export function resolveConfig(
   const timeoutValue =
     rawTimeout === undefined ? DEFAULT_TIMEOUT_MS : Number(rawTimeout);
   const errors: string[] = [];
+  if (options.enabled !== undefined && typeof options.enabled !== "boolean")
+    errors.push("enabled must be a boolean");
   if (binaryPath === "") errors.push("binaryPath must be a non-empty string");
   if (!Number.isFinite(timeoutValue) || timeoutValue <= 0)
     errors.push("timeoutMs must be a positive number");
@@ -82,6 +85,7 @@ export function resolveConfig(
   if (!rewriterPath) errors.push("rewriterPath must be a non-empty string");
 
   return {
+    enabled: options.enabled !== false,
     binaryPath: binaryPath === "" ? "aar" : binaryPath,
     tools,
     timeoutMs,

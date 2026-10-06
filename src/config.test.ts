@@ -129,3 +129,14 @@ test("explicit failure modes and RTK are accepted; unknown modes refuse", () => 
     null,
   );
 });
+
+test("enabled defaults to true and only boolean false disables the gate", () => {
+  assert.equal(resolveConfig({}, {}).enabled, true);
+  assert.equal(resolveConfig({ enabled: true }, {}).enabled, true);
+  assert.equal(resolveConfig({ enabled: false }, {}).enabled, false);
+  for (const enabled of ["false", 0, null]) {
+    const config = resolveConfig({ enabled }, {});
+    assert.equal(config.enabled, true);
+    assert.match(String(config.configError), /enabled must be a boolean/);
+  }
+});

@@ -12,6 +12,7 @@ import {
 export default Plugin.define({
   id: "command-gate-tui",
   setup(ctx) {
+    if (ctx.options.enabled === false) return;
     const rpc = ctx.client.rpc(Approvals);
     const clientID = crypto.randomUUID();
     let disposed = false;
