@@ -162,13 +162,18 @@ func assessCommand(request Request, ir ShellIR, options Options, config Config, 
 		label := connectionLabel(index)
 		modelCall := options.ModelCall
 		if modelCall == nil {
-			apiKey, err := assessorAPIKey(AssessorConfig{APIKeyEnv: connection.APIKeyEnv})
-			if err != nil {
-				lastErr = fmt.Errorf("%s credential unavailable", label)
-				log.record("assessor-unavailable", map[string]any{"connection": label, "error": "credential unavailable"})
-				continue
+			if connection.AuthMode == "codex" {
+				modelCall = &codexModelCall{authJSONPath: connection.AuthJSONPath, client: http.DefaultClient}
+			} else {
+
+				apiKey, err := assessorAPIKey(AssessorConfig{APIKeyEnv: connection.APIKeyEnv})
+				if err != nil {
+					lastErr = fmt.Errorf("%s credential unavailable", label)
+					log.record("assessor-unavailable", map[string]any{"connection": label, "error": "credential unavailable"})
+					continue
+				}
+				modelCall = &openAIModelCall{baseURL: connection.BaseURL, apiKey: apiKey, client: http.DefaultClient}
 			}
-			modelCall = &openAIModelCall{baseURL: connection.BaseURL, apiKey: apiKey, client: http.DefaultClient}
 		}
 		remainingDeadline, _ := ctx.Deadline()
 		connectionCtx, connectionCancel := context.WithTimeout(ctx, time.Until(remainingDeadline)/time.Duration(len(connections)-index))
@@ -259,10 +264,10 @@ func assessCommand(request Request, ir ShellIR, options Options, config Config, 
 }
 
 func assessorConnections(config AssessorConfig) []AssessorConnection {
-	connections := []AssessorConnection{{Model: config.Model, BaseURL: config.BaseURL, APIKeyEnv: config.APIKeyEnv, Options: config.Options}}
+	connections := []AssessorConnection{{AuthMode: config.AuthMode, AuthJSONPath: config.AuthJSONPath, Model: config.Model, BaseURL: config.BaseURL, APIKeyEnv: config.APIKeyEnv, Options: config.Options}}
 	for _, model := range config.FallbackModels {
 		if model != "" {
-			connections = append(connections, AssessorConnection{Model: model, BaseURL: config.BaseURL, APIKeyEnv: config.APIKeyEnv, Options: config.Options})
+			connections = append(connections, AssessorConnection{AuthMode: config.AuthMode, AuthJSONPath: config.AuthJSONPath, Model: model, BaseURL: config.BaseURL, APIKeyEnv: config.APIKeyEnv, Options: config.Options})
 		}
 	}
 	return append(connections, config.Fallbacks...)

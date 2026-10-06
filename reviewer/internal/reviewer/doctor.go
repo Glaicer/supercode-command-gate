@@ -40,6 +40,9 @@ func doctorConnections(config AssessorConfig) []DoctorConnection {
 	result := []DoctorConnection{}
 	for index, connection := range assessorConnections(config) {
 		_, err := assessorAPIKey(AssessorConfig{APIKeyEnv: connection.APIKeyEnv})
+		if connection.AuthMode == "codex" {
+			_, err = loadCodexCredentials(connection.AuthJSONPath)
+		}
 		result = append(result, DoctorConnection{Connection: connectionLabel(index), CredentialAvailable: err == nil})
 	}
 	return result
@@ -94,6 +97,10 @@ func validateAssessorConfiguration(config Config) error {
 			return errors.New("assessor.model is required when assessor configuration is present")
 		}
 		return nil
+	}
+	if config.Assessor.AuthMode == "codex" {
+		_, err := loadCodexCredentials(config.Assessor.AuthJSONPath)
+		return err
 	}
 	available := false
 	for index, connection := range assessorConnections(config.Assessor) {

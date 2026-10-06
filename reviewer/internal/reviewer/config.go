@@ -173,6 +173,25 @@ func projectConfigPath(request Request) string {
 
 func normalizeConfig(config Config) (Config, error) {
 	defaults := defaultConfig()
+	if config.Assessor.AuthMode != "" && config.Assessor.AuthMode != "api-key" && config.Assessor.AuthMode != "codex" {
+		return Config{}, errors.New("assessor.authMode must be api-key or codex")
+	}
+	if config.Assessor.AuthMode == "codex" {
+		if config.Assessor.Model == "" || !filepath.IsAbs(config.Assessor.AuthJSONPath) {
+			return Config{}, errors.New("codex assessor requires model and absolute authJsonPath")
+		}
+		if config.Assessor.BaseURL != "" || config.Assessor.APIKeyEnv != "" || len(config.Assessor.Fallbacks) > 0 {
+			return Config{}, errors.New("codex assessor cannot configure baseUrl, apiKeyEnv, or independent paid API fallbacks")
+		}
+		for key := range config.Assessor.Options {
+			if key != "reasoning" && key != "text" && key != "service_tier" {
+				return Config{}, errors.New("codex assessor options support only reasoning, text, and service_tier")
+			}
+		}
+	} else if config.Assessor.AuthJSONPath != "" {
+		return Config{}, errors.New("assessor.authJsonPath requires codex authMode")
+	}
+
 	if len(config.Assessor.FallbackModels) > 0 && len(config.Assessor.Fallbacks) > 0 {
 		return Config{}, errors.New("assessor.fallbackModels and assessor.fallbacks cannot be combined")
 	}
@@ -312,6 +331,20 @@ func applyConfigValues(config *Config, values map[string]any) error {
 		}
 	}
 	if section, ok := mapValue(values, "assessor"); ok {
+		for _, key := range []string{"authMode", "authJsonPath"} {
+			if raw, present := section[key]; present {
+				value, ok := raw.(string)
+				if !ok {
+					return fmt.Errorf("assessor.%s must be a string", key)
+				}
+				if key == "authMode" {
+					config.Assessor.AuthMode = value
+				} else {
+					config.Assessor.AuthJSONPath = value
+				}
+			}
+		}
+
 		if raw, present := section["fallbacks"]; present {
 			items, ok := raw.([]any)
 			if !ok {
