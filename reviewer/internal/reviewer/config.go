@@ -173,6 +173,32 @@ func projectConfigPath(request Request) string {
 
 func normalizeConfig(config Config) (Config, error) {
 	defaults := defaultConfig()
+	if len(config.Assessor.FallbackModels) > 0 && len(config.Assessor.Fallbacks) > 0 {
+		return Config{}, errors.New("assessor.fallbackModels and assessor.fallbacks cannot be combined")
+	}
+	for index, connection := range config.Assessor.Fallbacks {
+		if strings.TrimSpace(connection.Model) == "" || connection.BaseURL == "" || connection.APIKeyEnv == "" {
+			return Config{}, fmt.Errorf("assessor.fallbacks[%d] requires model, baseUrl, and apiKeyEnv", index)
+		}
+		if _, err := chatCompletionsURL(connection.BaseURL); err != nil {
+			return Config{}, fmt.Errorf("assessor.fallbacks[%d]: %w", index, err)
+		}
+		if connection.ContextWindow < 0 {
+			return Config{}, fmt.Errorf("assessor.fallbacks[%d].contextWindow must be nonnegative", index)
+		}
+		if _, err := normalizeConfig(Config{Assessor: AssessorConfig{Options: connection.Options}}); err != nil {
+			return Config{}, fmt.Errorf("assessor.fallbacks[%d]: %w", index, err)
+		}
+	}
+	if len(config.Assessor.Fallbacks) > 0 {
+		if strings.TrimSpace(config.Assessor.Model) == "" {
+			return Config{}, errors.New("assessor.model is required")
+		}
+		if _, err := chatCompletionsURL(config.Assessor.BaseURL); err != nil {
+			return Config{}, err
+		}
+	}
+
 	if config.Policy.Profile == "" {
 		config.Policy.Profile = defaults.Policy.Profile
 	}
@@ -225,6 +251,10 @@ func normalizeConfig(config Config) (Config, error) {
 func cloneConfig(config Config) Config {
 	clone := config
 	clone.Assessor.FallbackModels = append([]string(nil), config.Assessor.FallbackModels...)
+	clone.Assessor.Fallbacks = append([]AssessorConnection(nil), config.Assessor.Fallbacks...)
+	for index := range clone.Assessor.Fallbacks {
+		clone.Assessor.Fallbacks[index].Options = cloneMap(config.Assessor.Fallbacks[index].Options)
+	}
 	clone.Assessor.Options = cloneMap(config.Assessor.Options)
 	clone.Assessor.ContextWindows = cloneIntMap(config.Assessor.ContextWindows)
 	clone.Assessor.Interpreters = cloneInterpreterForms(config.Assessor.Interpreters)
@@ -282,6 +312,53 @@ func applyConfigValues(config *Config, values map[string]any) error {
 		}
 	}
 	if section, ok := mapValue(values, "assessor"); ok {
+		if raw, present := section["fallbacks"]; present {
+			items, ok := raw.([]any)
+			if !ok {
+				return errors.New("assessor.fallbacks must be an array of tables")
+			}
+			parsed := make([]AssessorConnection, 0, len(items))
+			for index, rawItem := range items {
+				item, ok := rawItem.(map[string]any)
+				if !ok {
+					return fmt.Errorf("assessor.fallbacks[%d] must be a table", index)
+				}
+				connection := AssessorConnection{}
+				for key, value := range item {
+					switch key {
+					case "model", "baseUrl", "apiKeyEnv":
+						text, ok := value.(string)
+						if !ok {
+							return fmt.Errorf("assessor.fallbacks[%d].%s must be a string", index, key)
+						}
+						switch key {
+						case "model":
+							connection.Model = text
+						case "baseUrl":
+							connection.BaseURL = text
+						case "apiKeyEnv":
+							connection.APIKeyEnv = text
+						}
+					case "options":
+						options, ok := value.(map[string]any)
+						if !ok {
+							return fmt.Errorf("assessor.fallbacks[%d].options must be a table", index)
+						}
+						connection.Options = options
+					case "contextWindow":
+						window, ok := intValue(item, key)
+						if !ok {
+							return fmt.Errorf("assessor.fallbacks[%d].contextWindow must be an integer", index)
+						}
+						connection.ContextWindow = window
+					default:
+						return fmt.Errorf("assessor.fallbacks[%d] contains unsupported field", index)
+					}
+				}
+				parsed = append(parsed, connection)
+			}
+			config.Assessor.Fallbacks = parsed
+		}
 		if raw, present := section["model"]; present {
 			value, ok := raw.(string)
 			if !ok {

@@ -33,6 +33,7 @@ type auditRecord struct {
 	RequestFingerprint string          `json:"requestFingerprint"`
 	Effects            []string        `json:"effects"`
 	Profile            string          `json:"profile"`
+	AssessorConnection string          `json:"assessorConnection,omitempty"`
 	AssessorModel      string          `json:"assessorModel,omitempty"`
 	AssessorAttempts   int             `json:"assessorAttempts,omitempty"`
 	FailureKind        string          `json:"failureKind,omitempty"`
@@ -159,6 +160,7 @@ func Check(request Request, options Options) (result Decision, resultErr error) 
 					"model": trace.Model, "attempts": trace.Attempts,
 					"assessment": redactedAssessment(assessment), "error": errorText(assessorErr),
 				})
+				decision.AssessorConnection = trace.Connection
 				decision.AssessorModel = trace.Model
 				decision.AssessorAttempts = trace.Attempts
 				if assessorErr != nil {
@@ -411,6 +413,7 @@ func writeAudit(request Request, decision Decision, options Options, config Conf
 		RequestFingerprint: decision.RequestFingerprint,
 		Effects:            effectsFor(decision),
 		Profile:            config.Policy.Profile,
+		AssessorConnection: decision.AssessorConnection,
 		AssessorModel:      decision.AssessorModel,
 		AssessorAttempts:   decision.AssessorAttempts,
 		FailureKind:        decision.FailureKind,
