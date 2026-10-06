@@ -538,6 +538,13 @@ func applyConfigValues(config *Config, values map[string]any) error {
 		}
 	}
 	if section, ok := mapValue(values, "audit"); ok {
+		if raw, present := section["enabled"]; present {
+			value, ok := raw.(bool)
+			if !ok {
+				return errors.New("audit.enabled must be a boolean")
+			}
+			config.Audit.Enabled = &value
+		}
 		if raw, present := section["dir"]; present {
 			value, ok := raw.(string)
 			if !ok {
