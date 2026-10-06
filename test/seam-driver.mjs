@@ -30,9 +30,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const gateDir = path.dirname(here);
 const opencode =
   process.env.OPENCODE_BIN ?? "/home/glaicer/.opencode/bin/opencode";
-const reviewer =
-  process.env.AAR_SOURCE ??
-  "/home/glaicer/Development/Personal/Supercode-dev/plugins/auto-approval-reviewer";
+const reviewer = process.env.AAR_SOURCE ?? path.join(gateDir, "reviewer");
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const COMPOUND_COMMAND = [
@@ -123,7 +121,9 @@ export async function runSeam(options = {}) {
           });
         const uncertainties = readableDenial
           ? ["Backup availability is unknown", "Remote behavior is unknown"]
-          : [];
+          : text.includes("compound-all.marker")
+            ? ["Deterministic fixture uncertainty"]
+            : [];
         if (text.includes("COMMAND_GATE_LONG_COMMAND")) {
           risks.push({
             ...risk,
@@ -1192,7 +1192,7 @@ async function bootHost(config) {
   const binaryPath = config.binaryPath ?? config.aar;
   await writeFile(
     `${root}/aar.toml`,
-    `[assessor]\nmodel = "seam"\nbaseUrl = "${config.baseURL}"\nonUnavailable = "deny"\n`,
+    `[policy]\nprofile = "balanced"\n[assessor]\nmodel = "seam"\nbaseUrl = "${config.baseURL}"\nonUnavailable = "deny"\n`,
   );
   await writeFile(
     `${root}/config/opencode/cli.json`,
