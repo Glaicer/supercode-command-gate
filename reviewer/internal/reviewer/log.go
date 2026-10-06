@@ -74,7 +74,7 @@ func newReviewLog(configured string) (*reviewLog, error) {
 }
 
 func (log *reviewLog) record(event string, detail map[string]any) {
-	if log.err != nil {
+	if log == nil || log.err != nil {
 		return
 	}
 	detail["event"] = event
@@ -99,6 +99,9 @@ func (log *reviewLog) record(event string, detail map[string]any) {
 }
 
 func (log *reviewLog) close() error {
+	if log == nil {
+		return nil
+	}
 	err := log.db.Close()
 	if log.err != nil {
 		return log.err
@@ -130,4 +133,8 @@ func errorText(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func (config AuditConfig) IsEnabled() bool {
+	return config.Enabled == nil || *config.Enabled
 }
