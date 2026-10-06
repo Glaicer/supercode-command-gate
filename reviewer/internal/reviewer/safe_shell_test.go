@@ -94,7 +94,7 @@ func TestSafeShellExpansionBoundaries(t *testing.T) {
 		{"cat source 2>&1-", false},
 		{"cat source 2>&$FD", false},
 		{"cat docs/*.md > output/*.txt", false},
-		{"stat --format='%s' docs/{1..8}.png", false},
+		{"stat --format='%s' docs/{1..8}.png", true},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
 			request := testRequest(t, tc.command)

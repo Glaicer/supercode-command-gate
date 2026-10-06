@@ -152,7 +152,9 @@ func (e *policyEvaluator) commandSafe(command IRCommand, state policyState, stdi
 		return e.safePathReader(args, state.cwd, true, treeOptions)
 	case "file":
 		return e.safePathReader(args, state.cwd, stdinSafe, fileOptions)
-	case "stat", "du", "wc", "uniq", "cut", "tr", "readlink", "realpath", "basename", "dirname":
+	case "stat":
+		return e.safePathReader(args, state.cwd, stdinSafe, optionGrammar{values: map[string]bool{"--format=": true}})
+	case "du", "wc", "uniq", "cut", "tr", "readlink", "realpath", "basename", "dirname":
 		return e.safePathReader(args, state.cwd, stdinSafe, permissiveReadOptions)
 	case "sort":
 		return e.safePathReader(args, state.cwd, stdinSafe, sortOptions)
@@ -435,6 +437,9 @@ func (e *policyEvaluator) safeGrep(args []string, cwd string, stdinSafe bool) (b
 			return false, policyState{cwd: cwd}
 		}
 		if strings.HasPrefix(arg, "-") && arg != "-" {
+			if len(arg) > 2 && containsAny([]string{arg[:2]}, "-A", "-B", "-C") && strings.Trim(arg[2:], "0123456789") == "" {
+				continue
+			}
 			if option, value, hasValue := splitOptionAssignment(arg, optionsWithValues); hasValue {
 				if option == "-e" || option == "--regexp" || option == "-f" || option == "--file" {
 					patternSeen = true
@@ -932,6 +937,9 @@ subcommand:
 		return false, policyState{cwd: cwd}
 	}
 	for _, arg := range remaining {
+		if subcommand == "check-ignore" && arg != "-v" && arg != "--" && !e.safeReadPath(arg, effectiveCWD) {
+			return false, policyState{cwd: cwd}
+		}
 		if strings.HasPrefix(arg, "-") || arg == "--" || strings.Contains(arg, ":") {
 			continue
 		}
@@ -946,9 +954,24 @@ subcommand:
 
 func readOnlyGitSubcommand(subcommand string, args []string) bool {
 	switch subcommand {
+	case "merge-base":
+		return len(args) == 3 && args[0] == "--is-ancestor" && args[1] != "" && args[2] != "" && !strings.HasPrefix(args[1], "-") && !strings.HasPrefix(args[2], "-")
+	case "check-ignore":
+		if len(args) > 0 && args[0] == "-v" {
+			args = args[1:]
+		}
+		if len(args) > 0 && args[0] == "--" {
+			args = args[1:]
+		}
+		return len(args) > 0 && gitOperandsOnly(args)
+	case "show-ref":
+		return len(args) == 1 && args[0] == "--heads"
 	case "status", "diff", "log", "show", "grep", "ls-files", "ls-tree", "rev-parse", "rev-list", "cat-file", "blame", "describe", "shortlog", "name-rev", "whatchanged", "count-objects", "fsck":
 		return !containsAnyGitWriteFlag(args)
 	case "branch":
+		if containsAny(args, "--list") {
+			return branchListingFlagsOnly(args)
+		}
 		return noGitOperands(args) && !containsAny(args, "-d", "-D", "-m", "-M", "-c", "-C", "-f", "--delete", "--move", "--copy", "--force", "--edit-description", "--set-upstream-to", "--unset-upstream", "--track") && !containsAnyPrefix(args, "--set-upstream-to=", "--unset-upstream=", "--track=")
 	case "tag":
 		return noGitOperands(args) && !containsAny(args, "-d", "-a", "-s", "-u", "-m", "-F", "-f", "--delete", "--annotate", "--sign", "--force")
@@ -965,6 +988,31 @@ func readOnlyGitSubcommand(subcommand string, args []string) bool {
 	default:
 		return false
 	}
+}
+
+func branchListingFlagsOnly(args []string) bool {
+	listing := false
+	for _, arg := range args {
+		if arg == "--" {
+			return listing
+		}
+		if arg == "--list" {
+			listing = true
+		}
+		if strings.HasPrefix(arg, "-") && !containsAny([]string{arg}, "--list", "--all", "--remotes", "-a", "-r") {
+			return false
+		}
+	}
+	return listing
+}
+
+func gitOperandsOnly(args []string) bool {
+	for _, arg := range args {
+		if arg == "" || strings.HasPrefix(arg, "-") {
+			return false
+		}
+	}
+	return true
 }
 
 func noGitOperands(args []string) bool {

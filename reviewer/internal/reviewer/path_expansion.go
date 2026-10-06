@@ -13,7 +13,7 @@ import (
 const maxPathExpansion = 256
 
 var numericBrace = regexp.MustCompile(`\{(0|[1-9][0-9]*)\.\.(0|[1-9][0-9]*)\}`)
-var expansionWord = regexp.MustCompile(`^[a-zA-Z0-9_./*?{}-]+$`)
+var expansionWord = regexp.MustCompile(`^[a-zA-Z0-9_@./*?{}-]+$`)
 
 func onlyPathExpansions(features []string) bool {
 	if len(features) == 0 {
