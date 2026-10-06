@@ -88,7 +88,8 @@ type GrantsConfig struct {
 }
 
 type AuditConfig struct {
-	Dir string
+	Enabled *bool
+	Dir     string
 }
 
 // ModelCall is the only transport seam between policy and a model provider.

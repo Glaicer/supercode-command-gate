@@ -12,6 +12,7 @@ import (
 // It deliberately reports contract versions and operational deadlines without
 // exposing configuration values or credential material.
 type DoctorReport struct {
+	LoggingEnabled             bool   `json:"loggingEnabled"`
 	SchemaVersion              string `json:"schemaVersion"`
 	ContractVersion            string `json:"contractVersion"`
 	Status                     string `json:"status"`
@@ -49,6 +50,7 @@ func Doctor(request Request, options Options) (DoctorReport, error) {
 	}
 
 	return DoctorReport{
+		LoggingEnabled:             config.Audit.IsEnabled(),
 		SchemaVersion:              "aar-doctor-v1",
 		ContractVersion:            "aar-contract-v1",
 		Status:                     "ok",

@@ -235,3 +235,71 @@ func TestReviewDatabaseCommitsEventsBeforeAssessmentFinishes(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDisabledHistoryKeepsDecisionsWithoutOpeningLogFiles(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("[audit]\nenabled = false\n[assessor]\nmodel = 'test'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"audit", "logs"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("unavailable"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, command := range []string{"pwd", "touch ./output", "rm -rf /"} {
+		decision, err := reviewer.Check(assessorRequest(t, command), reviewer.Options{StateDir: dir, ConfigPath: configPath, ModelCall: &fakeModelCall{responses: []string{`{"risks":[],"uncertainties":[]}`}}})
+		if err != nil || decision.AuditID == "" {
+			t.Fatalf("%s: decision %#v error %v", command, decision, err)
+		}
+		if _, err := reviewer.Explain(decision.AuditID, reviewer.Options{StateDir: dir}); err == nil {
+			t.Fatal("disabled history fabricated an audit record")
+		}
+	}
+	request := assessorRequest(t, "pwd")
+	request.SchemaVersion = "invalid"
+	if _, err := reviewer.Check(request, reviewer.Options{StateDir: dir, ConfigPath: configPath}); err == nil {
+		t.Fatal("invalid request accepted")
+	}
+	for _, name := range []string{"audit", "logs"} {
+		payload, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(payload) != "unavailable" {
+			t.Fatalf("history path changed: %s: %s %v", name, payload, err)
+		}
+	}
+}
+
+func TestDisabledHistoryPreservesRetriesFailuresAndHumanGrants(t *testing.T) {
+	disabled := false
+	state := t.TempDir()
+	config := &reviewer.Config{Audit: reviewer.AuditConfig{Enabled: &disabled}, Assessor: reviewer.AssessorConfig{Model: "primary", FallbackModels: []string{"fallback"}}, Policy: reviewer.PolicyConfig{Profile: "balanced"}, Grants: reviewer.GrantsConfig{SessionTrust: true}}
+	request := assessorRequest(t, "touch ./output")
+	valid := `{"risks":[],"uncertainties":[]}`
+	decision, err := reviewer.Check(request, reviewer.Options{StateDir: state, Config: config, ModelCall: &fakeModelCall{responses: []string{"not json", "still not json", valid}}})
+	if err != nil || decision.Decision != reviewer.DecisionAllow || decision.AssessorAttempts != 3 {
+		t.Fatalf("retry decision %#v: %v", decision, err)
+	}
+	decision, err = reviewer.Check(request, reviewer.Options{StateDir: state, Config: config, ModelCall: &fakeModelCall{}})
+	if err != nil || decision.Source != reviewer.SourceUnavailable {
+		t.Fatalf("failure %#v: %v", decision, err)
+	}
+	risk := `{"risks":[{"category":"privilege","likelihood":"likely","severity":"high","reversible":false,"affectsProtectedPaths":false,"evidence":"requires an elevated effect"}],"uncertainties":[]}`
+	decision, err = reviewer.Check(request, reviewer.Options{StateDir: state, Config: config, ModelCall: &fakeModelCall{responses: []string{risk}}})
+	if err != nil || decision.Decision != reviewer.DecisionAsk || !decision.GrantEligible {
+		t.Fatalf("ask %#v: %v", decision, err)
+	}
+	if err := reviewer.Grant(request.Session.ID, decision.RequestFingerprint, reviewer.GrantScopeSession, reviewer.Options{StateDir: state, Config: config}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		decision, err = reviewer.Check(request, reviewer.Options{StateDir: state, Config: config, ModelCall: &fakeModelCall{}})
+		if err != nil || decision.Source != reviewer.SourceGrant || decision.Decision != reviewer.DecisionAllow {
+			t.Fatalf("grant %#v: %v", decision, err)
+		}
+	}
+	for _, name := range []string{"audit", "logs"} {
+		if _, err := os.Stat(filepath.Join(state, name)); !os.IsNotExist(err) {
+			t.Fatalf("history created %s: %v", name, err)
+		}
+	}
+}
