@@ -21,6 +21,7 @@ export default Plugin.define({
     let syncing = false;
     let active: string | null = null;
     let activeAlert: UnavailableAlert | null = null;
+    let activeAlertDirectory: string | null = null;
     const alerted = new Set<string>();
     let clearReady = false;
     let diagnostic: string | null = null;
@@ -185,23 +186,45 @@ export default Plugin.define({
           });
         diagnostic = message;
         const route = ctx.ui.router.current();
+        const requestedDirectory = (ctx.location ?? ctx.data.location.default())
+          .directory;
+        const requestedSession =
+          route.type === "session" ? route.sessionID : null;
         const alerts =
           route.type === "session"
             ? ((await rpc.alerts({
                 sessionID: route.sessionID,
               })) as UnavailableAlert[])
             : [];
+        if (disposed) return;
+        const currentRoute = ctx.ui.router.current();
+        const currentDirectory = (ctx.location ?? ctx.data.location.default())
+          .directory;
         if (
           activeAlert &&
-          (route.type !== "session" ||
-            activeAlert.sessionID !== route.sessionID)
+          (currentRoute.type !== "session" ||
+            activeAlert.sessionID !== currentRoute.sessionID ||
+            activeAlertDirectory !== currentDirectory)
         )
           ctx.ui.dialog.clear();
+        if (
+          currentDirectory !== requestedDirectory ||
+          (requestedSession !== null &&
+            (currentRoute.type !== "session" ||
+              currentRoute.sessionID !== requestedSession))
+        )
+          return;
         if (!showing) {
-          const item = alerts.find((item) => !alerted.has(item.id));
+          const item = alerts.find(
+            (item) =>
+              currentRoute.type === "session" &&
+              item.sessionID === currentRoute.sessionID &&
+              !alerted.has(item.id),
+          );
           if (item) {
             showing = true;
             activeAlert = item;
+            activeAlertDirectory = currentDirectory;
             alerted.add(item.id);
             void ctx.ui.dialog
               .alert({
@@ -210,6 +233,7 @@ export default Plugin.define({
               })
               .finally(() => {
                 activeAlert = null;
+                activeAlertDirectory = null;
                 showing = false;
               });
           }

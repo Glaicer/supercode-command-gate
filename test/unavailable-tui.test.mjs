@@ -98,3 +98,96 @@ test("operational alerts are dismissible, session scoped and deduplicated withou
     dispose();
   }
 });
+
+test("late operational alerts cannot open after the active session or location changes", async () => {
+  for (const navigation of ["session", "location"]) {
+    let resolveAlerts;
+    let changed;
+    let route = { type: "session", sessionID: "one" };
+    const location = { directory: "/project" };
+    const shown = [];
+    let requested = false;
+    const rpc = {
+      connect: async () => ({}),
+      disconnect: async () => ({}),
+      status: async () => ({ healthy: true, failureMode: "deny" }),
+      alerts: async () => {
+        if (!requested) {
+          requested = true;
+          return new Promise((resolve) => {
+            resolveAlerts = resolve;
+          });
+        }
+        return [
+          {
+            id: "outage-one",
+            sessionID: "one",
+            component: "assessor",
+            reason: "Assessor unavailable",
+          },
+        ];
+      },
+      list: async () => [],
+      events: {
+        on: (_, handler) => {
+          changed = handler;
+          return () => {};
+        },
+      },
+    };
+    const dispose = tui.setup({
+      options: {},
+      client: { rpc: () => rpc },
+      location,
+      renderer: { width: 120, height: 40, on() {}, off() {} },
+      keymap: {
+        layer() {},
+        commands: () => [{ id: "clear", slash: { name: "clear" }, run() {} }],
+      },
+      ui: {
+        toast: { show() {} },
+        router: { current: () => route },
+        slot: ({ render }) => {
+          render();
+          return () => {};
+        },
+        dialog: {
+          alert: (input) => {
+            shown.push(input);
+            return Promise.resolve();
+          },
+          clear() {},
+          set() {},
+        },
+      },
+    });
+    try {
+      await tick();
+      assert.equal(typeof resolveAlerts, "function");
+      if (navigation === "session")
+        route = { type: "session", sessionID: "two" };
+      else location.directory = "/other";
+      resolveAlerts([
+        {
+          id: "outage-one",
+          sessionID: "one",
+          component: "assessor",
+          reason: "Assessor unavailable",
+        },
+      ]);
+      await tick();
+      assert.deepEqual(shown, [], navigation);
+      route = { type: "session", sessionID: "one" };
+      location.directory = "/project";
+      changed({ location: { directory: "/project" } });
+      await tick();
+      assert.equal(
+        shown.length,
+        1,
+        "skipped alert remains available in its original context",
+      );
+    } finally {
+      dispose();
+    }
+  }
+});

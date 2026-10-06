@@ -40,7 +40,7 @@ import { ApprovalQueue, type ApprovalReply } from "./approval.ts";
 import {
   UnavailableAlerts,
   safeOperationalReason,
-  assessorUnavailableReason,
+  unavailableDecisionAlert,
 } from "./unavailable.ts";
 import { Approvals } from "./rpc.ts";
 
@@ -666,18 +666,17 @@ export default Plugin.define({
           } catch (error) {
             return operationalFailure(errorMessage(error));
           }
-          unavailableAlerts.recover(call.sessionID, "reviewer");
-          if (decision.source === "assessor")
-            unavailableAlerts.recover(call.sessionID, "assessor");
+          unavailableAlerts.reviewed(call.sessionID, decision);
           if (
             decision.source === "unavailable" &&
             (decision.decision === "deny" ||
               config.approvalMode === "never-ask")
           ) {
+            const diagnostic = unavailableDecisionAlert(decision.failureKind);
             reportUnavailable(
               call.sessionID,
-              "assessor",
-              assessorUnavailableReason(decision.failureKind),
+              diagnostic.component,
+              diagnostic.reason,
             );
           }
           const fingerprint = fingerprintFor(request);
@@ -744,12 +743,16 @@ export default Plugin.define({
                 ["unavailable", "disconnected", "timeout"].includes(
                   response.value,
                 )
-              )
+              ) {
+                const diagnostic = unavailableDecisionAlert(
+                  decision.failureKind,
+                );
                 reportUnavailable(
                   call.sessionID,
-                  "assessor",
-                  assessorUnavailableReason(decision.failureKind),
+                  diagnostic.component,
+                  diagnostic.reason,
                 );
+              }
               if (response.ok && response.value === "deny") {
                 const noted = yield* attemptPromise((signal) =>
                   callAction(
@@ -840,14 +843,15 @@ export default Plugin.define({
                 false,
               );
             if (reconciled.ok && reviewed) {
-              unavailableAlerts.recover(call.sessionID, "reviewer");
-              if (reviewed.source === "assessor")
-                unavailableAlerts.recover(call.sessionID, "assessor");
+              unavailableAlerts.reviewed(call.sessionID, reviewed);
               if (reviewed.source === "unavailable") {
+                const diagnostic = unavailableDecisionAlert(
+                  reviewed.failureKind,
+                );
                 reportUnavailable(
                   call.sessionID,
-                  "assessor",
-                  assessorUnavailableReason(reviewed.failureKind),
+                  diagnostic.component,
+                  diagnostic.reason,
                 );
                 return {
                   kind: "deny",

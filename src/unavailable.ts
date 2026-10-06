@@ -29,6 +29,27 @@ export function assessorUnavailableReason(failureKind?: string): string {
   return `Command Risk Assessor unavailable: ${reasons[failureKind ?? ""] ?? "diagnostic reason is not available"}`;
 }
 
+export function unavailableDecisionAlert(
+  failureKind?: string,
+): Pick<UnavailableAlert, "component" | "reason"> {
+  if (
+    [
+      "provider-outage",
+      "invalid-json",
+      "schema-invalid",
+      "context-evidence",
+    ].includes(failureKind ?? "")
+  )
+    return {
+      component: "assessor",
+      reason: assessorUnavailableReason(failureKind),
+    };
+  return {
+    component: "reviewer",
+    reason: "Reviewer unavailable; diagnostic reason is not available",
+  };
+}
+
 export class UnavailableAlerts {
   #episodes = new Map<string, UnavailableAlert>();
   fail(
@@ -46,6 +67,17 @@ export class UnavailableAlerts {
     };
     this.#episodes.set(key, alert);
     return alert;
+  }
+  reviewed(
+    sessionID: string,
+    decision: { source: string; failureKind?: string },
+  ): void {
+    if (
+      decision.source !== "unavailable" ||
+      unavailableDecisionAlert(decision.failureKind).component !== "reviewer"
+    )
+      this.recover(sessionID, "reviewer");
+    if (decision.source === "assessor") this.recover(sessionID, "assessor");
   }
   recover(sessionID: string, component: UnavailableAlert["component"]): void {
     this.#episodes.delete(`${sessionID}:${component}`);
