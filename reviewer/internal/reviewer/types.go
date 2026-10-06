@@ -4,13 +4,14 @@ import "context"
 
 // Request is the versioned stdin contract for `aar check`.
 type Request struct {
-	SchemaVersion string            `json:"schemaVersion"`
-	Command       string            `json:"command"`
-	CWD           string            `json:"cwd"`
-	WorkspaceRoot *string           `json:"workspaceRoot"`
-	Env           map[string]string `json:"env"`
-	Session       Session           `json:"session"`
-	Intent        Intent            `json:"intent"`
+	SchemaVersion      string            `json:"schemaVersion"`
+	ExecutionEnvDigest string            `json:"executionEnvDigest,omitempty"`
+	Command            string            `json:"command"`
+	CWD                string            `json:"cwd"`
+	WorkspaceRoot      *string           `json:"workspaceRoot"`
+	Env                map[string]string `json:"env"`
+	Session            Session           `json:"session"`
+	Intent             Intent            `json:"intent"`
 }
 
 type Session struct {
@@ -53,8 +54,11 @@ type Config struct {
 }
 
 type AssessorConfig struct {
+	AuthMode       string
+	AuthJSONPath   string
 	Model          string
 	FallbackModels []string
+	Fallbacks      []AssessorConnection
 	BaseURL        string
 	APIKeyEnv      string
 	TotalTimeoutMs int
@@ -67,6 +71,16 @@ type AssessorConfig struct {
 	// evidence extraction. It is intentionally data-only; it cannot authorize a
 	// command or change the local policy mapper.
 	Interpreters map[string]InterpreterForm
+}
+
+type AssessorConnection struct {
+	AuthMode      string
+	AuthJSONPath  string
+	Model         string
+	BaseURL       string
+	APIKeyEnv     string
+	Options       map[string]any
+	ContextWindow int
 }
 
 type InterpreterForm struct {
@@ -100,6 +114,7 @@ type ModelCall interface {
 
 type ModelCallRequest struct {
 	Model        string
+	Connection   string
 	SystemPrompt string
 	UserPrompt   string
 	Options      map[string]any
@@ -138,6 +153,7 @@ type Decision struct {
 	GrantEligible          bool    `json:"grantEligible"`
 	GrantScope             string  `json:"grantScope,omitempty"`
 	AuditID                string  `json:"auditId"`
+	OriginAuditID          string  `json:"originAuditId,omitempty"`
 
 	// Dynamic is an internal observation used by callers and tests. It never
 	// crosses the aar-decision-v1 wire contract.
@@ -145,10 +161,11 @@ type Decision struct {
 
 	// Audit metadata is deliberately kept off the wire. It lets the Reviewer
 	// explain the outcome without exposing operational details to the Gate.
-	AssessorModel    string `json:"-"`
-	AssessorAttempts int    `json:"-"`
-	PolicyProfile    string `json:"-"`
-	DurationMs       int64  `json:"-"`
+	AssessorConnection string `json:"-"`
+	AssessorModel      string `json:"-"`
+	AssessorAttempts   int    `json:"-"`
+	PolicyProfile      string `json:"-"`
+	DurationMs         int64  `json:"-"`
 }
 
 const (
@@ -164,12 +181,13 @@ const (
 	GrantScopeOnce    = "once"
 	GrantScopeSession = "session"
 
-	SourceHardDeny    = "hard-deny"
-	SourceAutoAllow   = "auto-allow"
-	SourceGrant       = "grant"
-	SourceAssessor    = "assessor"
-	SourceUnavailable = "unavailable"
-	SourceDenyNote    = "deny-note"
+	SourceHardDeny      = "hard-deny"
+	SourceAutoAllow     = "auto-allow"
+	SourceGrant         = "grant"
+	SourceAssessor      = "assessor"
+	SourceReviewedTrust = "reviewed-trust"
+	SourceUnavailable   = "unavailable"
+	SourceDenyNote      = "deny-note"
 )
 
 const (

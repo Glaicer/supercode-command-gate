@@ -37,6 +37,19 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		return runDoctor(stdout)
 	}
+	if args[0] == "trust-reset" {
+		flags, err := namedFlags(args[1:])
+		if err != nil {
+			return err
+		}
+		if len(flags) != 1 || flags["project"] == "" {
+			return errors.New("usage: aar trust-reset --project <directory>")
+		}
+		if err := reviewer.ResetReviewedTrust(flags["project"], reviewer.Options{StateDir: os.Getenv("AAR_STATE_DIR")}); err != nil {
+			return err
+		}
+		return writeStatus(stdout, map[string]string{"status": "reset"})
+	}
 	if args[0] == "cleanup" {
 		if len(args) != 1 {
 			return errors.New("usage: aar cleanup")

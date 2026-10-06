@@ -15,10 +15,16 @@ const SOURCES = new Set([
   "auto-allow",
   "grant",
   "assessor",
+  "reviewed-trust",
   "unavailable",
   "deny-note",
 ]);
-const ALLOW_SOURCES = new Set(["auto-allow", "grant", "assessor"]);
+const ALLOW_SOURCES = new Set([
+  "auto-allow",
+  "grant",
+  "assessor",
+  "reviewed-trust",
+]);
 
 export type Decision = {
   schemaVersion: string;
@@ -33,6 +39,7 @@ export type Decision = {
   grantEligible: boolean;
   grantScope?: string;
   auditId: string;
+  originAuditId?: string;
 };
 
 export type DoctorReport = {
@@ -71,16 +78,17 @@ export function reviewerEnvironment(request: {
     const value = process.env[key];
     if (typeof value === "string") env[key] = value;
   }
-  const apiKeyEnv = reviewerApiKeyEnv(request);
-  if (apiKeyEnv && typeof process.env[apiKeyEnv] === "string")
-    env[apiKeyEnv] = process.env[apiKeyEnv];
+  for (const apiKeyEnv of reviewerApiKeyEnvs(request)) {
+    if (typeof process.env[apiKeyEnv] === "string")
+      env[apiKeyEnv] = process.env[apiKeyEnv];
+  }
   return env;
 }
 
-function reviewerApiKeyEnv(request: {
+function reviewerApiKeyEnvs(request: {
   cwd: string;
   workspaceRoot: string | null;
-}): string | null {
+}): string[] {
   const baseCandidates: string[] = [];
   if (process.env.AAR_CONFIG) baseCandidates.push(process.env.AAR_CONFIG);
   if (process.env.XDG_CONFIG_HOME)
@@ -101,39 +109,35 @@ function reviewerApiKeyEnv(request: {
       ),
     );
   else baseCandidates.push(path.join(home, ".config", "aar", "config.toml"));
-  let apiKeyEnv: string | null = null;
+  const names = new Set<string>();
   const basePath = baseCandidates.find((candidate) => existsSync(candidate));
-  if (basePath) apiKeyEnv = readApiKeyEnv(basePath);
   const projectRoot = request.workspaceRoot || request.cwd;
-  if (projectRoot) {
-    const projectValue = readApiKeyEnv(path.join(projectRoot, ".aar.toml"));
-    if (projectValue !== null) apiKeyEnv = projectValue;
+  for (const configPath of [
+    basePath,
+    projectRoot ? path.join(projectRoot, ".aar.toml") : undefined,
+  ]) {
+    if (configPath)
+      for (const name of readApiKeyEnvs(configPath)) names.add(name);
   }
-  return apiKeyEnv;
+  return [...names];
 }
 
-function readApiKeyEnv(configPath: string): string | null {
-  if (!existsSync(configPath)) return null;
+function readApiKeyEnvs(configPath: string): string[] {
   let source: string;
   try {
     source = readFileSync(configPath, "utf8");
   } catch {
-    return null;
+    return [];
   }
-  let section = "";
-  let value: string | null = null;
-  for (const rawLine of source.split(/\r?\n/)) {
-    const line = rawLine.replace(/#.*/, "").trim();
-    const table = line.match(/^\[([^\]]+)\]$/);
-    if (table) {
-      section = table[1].trim();
-      continue;
-    }
-    if (section !== "assessor") continue;
-    const assignment = line.match(/^apiKeyEnv\s*=\s*["']([^"']*)["']\s*$/);
-    if (assignment) value = assignment[1];
-  }
-  return value;
+  const declarations = source
+    .split(/\r?\n/)
+    .map((line) => line.replace(/#.*$/, ""))
+    .join("\n");
+  return [
+    ...declarations.matchAll(
+      /(?:^|[\n,{])\s*apiKeyEnv\s*=\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g,
+    ),
+  ].map((match) => match[1]);
 }
 
 function parseSingleDecisionLine(stdout: string): unknown {
@@ -434,9 +438,16 @@ export function validateDecision(
     throw new Error("reviewer emitted invalid source");
   if (value.decision === "allow" && !ALLOW_SOURCES.has(String(value.source))) {
     throw new Error(
-      "allow decisions must come from auto-allow, grant, or assessor",
+      "allow decisions must come from auto-allow, grant, assessor, or reviewed-trust",
     );
   }
+  if (
+    value.source === "reviewed-trust" &&
+    (value.decision !== "allow" ||
+      typeof value.originAuditId !== "string" ||
+      !/^[a-f0-9]{32}$/.test(value.originAuditId))
+  )
+    throw new Error("reviewed-trust requires allow and an origin audit id");
   if (value.source === "grant" && value.decision !== "allow")
     throw new Error("grant source requires an allow decision");
   if (value.source === "deny-note" && value.decision !== "deny")

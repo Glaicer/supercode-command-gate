@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 
 export type Request = {
   schemaVersion: string;
+  executionEnvDigest?: string;
   command: string;
   cwd: string;
   workspaceRoot: string | null;
@@ -57,6 +59,15 @@ export function assistantRationaleFor(
 }
 
 export const MATERIAL_ENV_KEYS = [
+  "PATH",
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "npm_config_userconfig",
+  "NPM_CONFIG_USERCONFIG",
+  "npm_config_globalconfig",
+  "NPM_CONFIG_GLOBALCONFIG",
+  "npm_config_script_shell",
+  "NPM_CONFIG_SCRIPT_SHELL",
   "CDPATH",
   "HOME",
   "PWD",
@@ -95,6 +106,15 @@ export function buildRequest(
     workspaceRoot:
       workspaceRoot === null ? null : canonicalDirectory(workspaceRoot),
     env: materialEnvSubset(invocation.env),
+    executionEnvDigest: createHash("sha256")
+      .update(
+        JSON.stringify(
+          Object.entries(invocation.env)
+            .filter(([, value]) => value !== undefined)
+            .sort(([a], [b]) => a.localeCompare(b)),
+        ),
+      )
+      .digest("hex"),
     session: {
       id: facts.sessionID,
       host: "opencode",
