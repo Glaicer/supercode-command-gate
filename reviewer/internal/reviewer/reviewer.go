@@ -45,15 +45,16 @@ type auditRecord struct {
 // Check evaluates Request.Command without executing it and optionally saves history.
 func Check(request Request, options Options) (result Decision, resultErr error) {
 	started := time.Now()
-	if err := validateRequest(request); err != nil {
-		return Decision{}, err
-	}
+	requestErr := validateRequest(request)
 	config, configErr := resolveReviewerConfig(request, options)
 	logOptions := options
 	if configErr == nil && logOptions.StateDir == "" {
 		logOptions.StateDir = config.Audit.Dir
 	}
 	defer func() {
+		if requestErr != nil {
+			return
+		}
 		stateDir, err := resolveStateDir(logOptions.StateDir)
 		if err == nil {
 			err = recordStats(stateDir, result, resultErr)
@@ -96,6 +97,9 @@ func Check(request Request, options Options) (result Decision, resultErr error) 
 		"sessionId": request.Session.ID, "intentId": request.Session.IntentID,
 	})
 
+	if requestErr != nil {
+		return Decision{}, requestErr
+	}
 	if configErr != nil {
 		return Decision{}, configErr
 	}
