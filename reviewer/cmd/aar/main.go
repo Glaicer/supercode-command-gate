@@ -22,7 +22,7 @@ func main() {
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: aar check | aar doctor | aar stats | aar cleanup | aar explain --audit-id <id> | aar grant --session <id> --fingerprint <fp> --scope once|session | aar deny-note --session <id> --fingerprint <fp> | aar session-event --session <id> --event end|clear|new-intent|goal-change")
+		return errors.New("usage: aar check | aar doctor | aar stats | aar cleanup | aar trust-reset --project <directory> | aar explain --audit-id <id> | aar grant --session <id> --fingerprint <fp> --scope once|session | aar deny-note --session <id> --fingerprint <fp> | aar session-event --session <id> --event end|clear|new-intent|goal-change")
 	}
 	if args[0] == "--version" || args[0] == "version" {
 		if len(args) != 1 {

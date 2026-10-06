@@ -188,3 +188,68 @@ test("reviewed trust authorizes only an allow linked to its original audit", () 
     );
   }
 });
+
+test("reviewed composition provenance requires complete valid node coverage", () => {
+  const make = (reviewedCoverage: unknown) =>
+    decision({
+      source: "reviewed-trust",
+      rule: null,
+      originAuditId: "a".repeat(32),
+      reviewedCoverage,
+    });
+  assert.equal(
+    validateDecision(
+      make([
+        {
+          commandIndex: 0,
+          source: "reviewed-trust",
+          originAuditId: "a".repeat(32),
+        },
+        { commandIndex: 1, source: "auto-allow", rule: "AA008" },
+      ]),
+      request,
+    ).source,
+    "reviewed-trust",
+  );
+  for (const coverage of [
+    [],
+    null,
+    [
+      {
+        commandIndex: -1,
+        source: "reviewed-trust",
+        originAuditId: "a".repeat(32),
+      },
+    ],
+    [{ commandIndex: 0, source: "grant", originAuditId: "a".repeat(32) }],
+    [{ commandIndex: 0, source: "auto-allow", rule: "AA008" }],
+    [
+      {
+        commandIndex: 0,
+        source: "reviewed-trust",
+        originAuditId: "b".repeat(32),
+      },
+    ],
+    [
+      {
+        commandIndex: 0,
+        source: "reviewed-trust",
+        originAuditId: "a".repeat(32),
+      },
+      { commandIndex: 0, source: "auto-allow", rule: "AA008" },
+    ],
+    [
+      {
+        commandIndex: 0,
+        source: "reviewed-trust",
+        originAuditId: "a".repeat(32),
+      },
+      { commandIndex: 1, source: "auto-allow" },
+    ],
+  ]) {
+    assert.throws(
+      () => validateDecision(make(coverage), request),
+      /reviewed composition provenance/,
+    );
+  }
+});

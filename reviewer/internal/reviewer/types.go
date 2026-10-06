@@ -140,20 +140,28 @@ type DataLossEvidence struct {
 	ValueReason string   `json:"valueReason"`
 }
 
+type ReviewedCoverage struct {
+	CommandIndex  int    `json:"commandIndex"`
+	Source        string `json:"source"`
+	Rule          string `json:"rule,omitempty"`
+	OriginAuditID string `json:"originAuditId,omitempty"`
+}
+
 type Decision struct {
-	SchemaVersion          string  `json:"schemaVersion"`
-	Decision               string  `json:"decision"`
-	Reason                 string  `json:"reason"`
-	Source                 string  `json:"source"`
-	FailureKind            string  `json:"failureKind,omitempty"`
-	Rule                   *string `json:"rule"`
-	Assessment             any     `json:"assessment"`
-	RequestFingerprint     string  `json:"requestFingerprint"`
-	RequestFingerprintBase string  `json:"requestFingerprintBase,omitempty"`
-	GrantEligible          bool    `json:"grantEligible"`
-	GrantScope             string  `json:"grantScope,omitempty"`
-	AuditID                string  `json:"auditId"`
-	OriginAuditID          string  `json:"originAuditId,omitempty"`
+	SchemaVersion          string             `json:"schemaVersion"`
+	Decision               string             `json:"decision"`
+	Reason                 string             `json:"reason"`
+	Source                 string             `json:"source"`
+	FailureKind            string             `json:"failureKind,omitempty"`
+	Rule                   *string            `json:"rule"`
+	Assessment             any                `json:"assessment"`
+	RequestFingerprint     string             `json:"requestFingerprint"`
+	RequestFingerprintBase string             `json:"requestFingerprintBase,omitempty"`
+	GrantEligible          bool               `json:"grantEligible"`
+	GrantScope             string             `json:"grantScope,omitempty"`
+	AuditID                string             `json:"auditId"`
+	OriginAuditID          string             `json:"originAuditId,omitempty"`
+	ReviewedCoverage       []ReviewedCoverage `json:"reviewedCoverage,omitempty"`
 
 	// Dynamic is an internal observation used by callers and tests. It never
 	// crosses the aar-decision-v1 wire contract.

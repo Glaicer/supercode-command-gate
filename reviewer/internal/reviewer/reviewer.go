@@ -21,25 +21,26 @@ var awsAccessKeyID = regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)
 var urlCredential = regexp.MustCompile(`(?i)(https?://[^/\s:@]+:)[^@\s]+(@)`)
 
 type auditRecord struct {
-	SchemaVersion      string          `json:"schemaVersion"`
-	AuditID            string          `json:"auditId"`
-	RecordedAt         string          `json:"recordedAt"`
-	Command            string          `json:"command"`
-	CWD                string          `json:"cwd"`
-	Decision           string          `json:"decision"`
-	Outcome            string          `json:"outcome"`
-	Source             string          `json:"source"`
-	OriginAuditID      string          `json:"originAuditId,omitempty"`
-	Rule               *string         `json:"rule"`
-	RequestFingerprint string          `json:"requestFingerprint"`
-	Effects            []string        `json:"effects"`
-	Profile            string          `json:"profile"`
-	AssessorConnection string          `json:"assessorConnection,omitempty"`
-	AssessorModel      string          `json:"assessorModel,omitempty"`
-	AssessorAttempts   int             `json:"assessorAttempts,omitempty"`
-	FailureKind        string          `json:"failureKind,omitempty"`
-	DurationMs         int64           `json:"durationMs"`
-	Assessment         *RiskAssessment `json:"assessment,omitempty"`
+	SchemaVersion      string             `json:"schemaVersion"`
+	AuditID            string             `json:"auditId"`
+	RecordedAt         string             `json:"recordedAt"`
+	Command            string             `json:"command"`
+	CWD                string             `json:"cwd"`
+	Decision           string             `json:"decision"`
+	Outcome            string             `json:"outcome"`
+	Source             string             `json:"source"`
+	OriginAuditID      string             `json:"originAuditId,omitempty"`
+	ReviewedCoverage   []ReviewedCoverage `json:"reviewedCoverage,omitempty"`
+	Rule               *string            `json:"rule"`
+	RequestFingerprint string             `json:"requestFingerprint"`
+	Effects            []string           `json:"effects"`
+	Profile            string             `json:"profile"`
+	AssessorConnection string             `json:"assessorConnection,omitempty"`
+	AssessorModel      string             `json:"assessorModel,omitempty"`
+	AssessorAttempts   int                `json:"assessorAttempts,omitempty"`
+	FailureKind        string             `json:"failureKind,omitempty"`
+	DurationMs         int64              `json:"durationMs"`
+	Assessment         *RiskAssessment    `json:"assessment,omitempty"`
 }
 
 // Check evaluates Request.Command without executing it and optionally saves history.
@@ -190,7 +191,27 @@ func Check(request Request, options Options) (result Decision, resultErr error) 
 					decision.Reason = "development launch conditions changed while reading reviewed trust; retry the command"
 					log.record("reviewed-trust", map[string]any{"status": "miss", "reason": "launch changed while reading"})
 				}
+			} else if composition, covered := evaluateReviewedComposition(request, ir, policyOptions, config, grantStateDir); covered {
+				current, stillCovered := evaluateReviewedComposition(request, ir, policyOptions, config, grantStateDir)
+				if stillCovered && launchDigest(current.Coverage) == launchDigest(composition.Coverage) {
+					decision.Decision = DecisionAllow
+					decision.Source = SourceReviewedTrust
+					decision.Reason = "every possible shell element is covered by current policy or an individually reviewed development launch"
+					decision.ReviewedCoverage = composition.Coverage
+					for _, coverage := range composition.Coverage {
+						if coverage.Source == SourceReviewedTrust {
+							decision.OriginAuditID = coverage.OriginAuditID
+							break
+						}
+					}
+					log.record("reviewed-composition", map[string]any{"status": "hit", "coverage": composition.Coverage})
+				} else {
+					decision.Source = SourceUnavailable
+					decision.Reason = "composition launch conditions changed while reading reviewed trust; retry the command"
+					log.record("reviewed-composition", map[string]any{"status": "miss", "reason": "launch conditions changed while reading"})
+				}
 			} else {
+				log.record("reviewed-composition", map[string]any{"status": "miss", "reason": composition.MissReason, "commandIndex": composition.MissCommand, "coverage": composition.Coverage})
 				if launchMiss == "" {
 					launchMiss = "no matching current launch (new, changed, reset, expired or invalid record)"
 				}
@@ -467,6 +488,7 @@ func writeAudit(request Request, decision Decision, options Options, config Conf
 		Outcome:            auditOutcome(decision.Source),
 		Source:             decision.Source,
 		OriginAuditID:      decision.OriginAuditID,
+		ReviewedCoverage:   decision.ReviewedCoverage,
 		Rule:               decision.Rule,
 		RequestFingerprint: decision.RequestFingerprint,
 		Effects:            effectsFor(decision),
