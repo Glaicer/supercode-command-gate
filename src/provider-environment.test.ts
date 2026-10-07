@@ -32,3 +32,24 @@ test("reviewer receives explicitly configured primary and fallback credentials",
     process.env = original;
   }
 });
+
+test("reviewer CLI inherits the OpenCode credential namespace", () => {
+  const original = { ...process.env };
+  const values = {
+    OPENCODE_BIN: "/synthetic/bin/opencode",
+    OPENCODE_CONFIG_DIR: "/synthetic/opencode-config",
+    XDG_DATA_HOME: "/synthetic/data",
+    XDG_CACHE_HOME: "/synthetic/cache",
+  };
+  try {
+    Object.assign(process.env, values);
+    process.env.SYNTHETIC_UNRELATED = "do not forward";
+    const env = reviewerEnvironment({ cwd: tmpdir(), workspaceRoot: null });
+    for (const [key, value] of Object.entries(values)) {
+      assert.equal(env[key], value);
+    }
+    assert.equal(env.SYNTHETIC_UNRELATED, undefined);
+  } finally {
+    process.env = original;
+  }
+});

@@ -66,12 +66,13 @@ func loadCodexCredentials(filename string) (codexCredentials, error) {
 }
 
 type codexModelCall struct {
+	authMode     string
 	authJSONPath string
 	client       *http.Client
 }
 
 func (call *codexModelCall) Call(ctx context.Context, request ModelCallRequest) (string, error) {
-	credentials, err := loadCodexCredentials(call.authJSONPath)
+	credentials, err := loadSubscriptionCredentials(ctx, call.authMode, call.authJSONPath)
 	if err != nil {
 		return "", err
 	}
@@ -110,9 +111,13 @@ func (call *codexModelCall) Call(ctx context.Context, request ModelCallRequest) 
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		owner := "Codex"
+		if call.authMode == "opencode" {
+			owner = "OpenCode"
+		}
 		switch response.StatusCode {
 		case 401:
-			return "", errors.New("Codex subscription authentication rejected; refresh or sign in with Codex, then retry")
+			return "", fmt.Errorf("subscription authentication rejected; refresh or sign in with %s, then retry", owner)
 		case 403:
 			return "", errors.New("Codex subscription access denied; check account/model entitlement")
 		case 429:

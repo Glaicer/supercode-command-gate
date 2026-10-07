@@ -143,45 +143,65 @@ model IDs, without exposing endpoints or keys. Doctor succeeds when at least
 one configured connection has an available credential, so a missing primary
 key does not prevent a usable fallback. Structural errors always fail validation.
 
-## Codex ChatGPT subscription authentication
+## ChatGPT subscription authentication
 
-The Assessor can use ChatGPT sign-in credentials from the **Codex** file format:
+Use the **OpenCode** harness as the credential owner. Sign in there:
+
+```sh
+opencode auth login openai --method chatgpt-browser
+```
+
+Configure the Assessor to read its active ChatGPT subscription connection:
 
 ```toml
 [assessor]
 model = "gpt-6-luna"
-authMode = "codex"
-authJsonPath = "/absolute/path/to/.codex/auth.json"
+authMode = "opencode"
 totalTimeoutMs = 20000
 options = { reasoning = { effort = "none" } }
 ```
 
-This mode is separate from `authMode = "api-key"` (the default) and paid OpenAI
-API billing. ChatGPT/Codex entitlement, available models and usage limits depend
-on the account; Plus does not provide every API model or unlimited access.
-[Official authentication documentation](https://learn.chatgpt.com/docs/auth)
-describes Codex file/keyring storage and owner-managed token refresh.
-[Model availability](https://learn.chatgpt.com/docs/changelog) describes the
-GPT-6 Luna rollout; a locally readable token cannot prove model entitlement.
+In OpenCode v2.0.24, `auth.json` is a legacy migration input; credentials and
+subsequent updates live in its database. AAR reads current entries through the
+public `opencode auth export` CLI, selecting exactly one active `openai` OAuth
+credential with method `chatgpt-browser` or `chatgpt-headless`, an access token,
+account ID and unexpired millisecond expiry. Inactive credentials and unrelated
+providers are ignored; API-key connections, malformed output and ambiguous active
+connections fail closed. Export output stays in memory and is bounded to 1 MiB;
+credentials never enter Reviewer requests, audit, trace or diagnostics.
 
-Supported first format: Codex `auth.json`, with optional `auth_mode = "chatgpt"`,
-`tokens.access_token` as a JWT containing `exp`, and `tokens.account_id`.
-`tokens.id_token`, `tokens.refresh_token`, `last_refresh` and unrelated entries
-may exist. OpenCode's provider-keyed OAuth JSON, API-key files, keyrings and
-other Codex auth modes are unsupported. Use an explicitly configured absolute
-path to a private regular file (0600, maximum 1 MiB); there is no automatic
-credential search or copying. JWT expiry is a local readiness hint; the server
-verifies credentials and account/model access.
+The CLI defaults to `opencode` on PATH; `OPENCODE_BIN` selects the harness binary.
+Gate forwards `OPENCODE_CONFIG_DIR`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` along with
+its existing HOME/config environment. Use the same namespace as the harness where
+you logged in. Global export avoids booting a project location and recursively
+loading Gate. It uses the normal OpenCode CLI server connection, which may start
+the managed service if absent. `aar doctor` queries credentials through this
+connection, but performs no provider/LLM call and starts no login flow.
 
-AAR reads the owner file afresh on every attempt. It never writes credentials,
-rotates refresh tokens, calls the OAuth refresh endpoint or starts login. Codex
-owns refresh: when expired/revoked, refresh or sign in with Codex and retry.
-Updated owner files are reloaded even between authentication retries. Parallel
-AAR processes only read the file, avoiding competing refresh-token rotation;
-an incomplete owner write fails closed and can be retried after it completes.
-`aar doctor` validates local format/expiry/permissions without any network call;
-remote revocation, entitlement and usage limits can only be established by a
-provider request. Diagnostics describe these cases without tokens or account IDs.
+AAR reloads credentials on each attempt, including authentication retries. It
+never writes the owner store, rotates tokens, calls an OAuth refresh endpoint or
+starts login. OpenCode refreshes credentials through its own provider lifecycle;
+export itself does not refresh them. If expired or revoked, refresh or sign in
+through OpenCode and retry. CLI execution shares the assessment deadline.
+
+Subscription authentication is separate from default `authMode = "api-key"` and
+paid OpenAI API billing. Account entitlement, model availability and usage limits
+still apply; a readable token does not prove access to the requested model.
+
+### Legacy Codex file mode
+
+The previous reader remains available with `authMode = "codex"` and an explicit
+absolute `authJsonPath = "/absolute/path/to/.codex/auth.json"`. It supports Codex
+`auth.json`, optional `auth_mode = "chatgpt"`, `tokens.access_token` as a JWT with
+`exp`, and `tokens.account_id`. The private regular file must have permissions
+0600 and be at most 1 MiB. Other Codex auth modes, keyrings and provider-keyed
+OpenCode legacy JSON are unsupported. This mode performs no credential search;
+Codex owns refresh and AAR reloads its file on each attempt. Doctor checks this
+file locally without a network call.
+
+[Official Codex authentication documentation](https://learn.chatgpt.com/docs/auth)
+describes this legacy owner/file mode. JWT expiry is a local readiness hint;
+the subscription server verifies credentials and account/model access.
 
 Subscription requests go only to
 `https://chatgpt.com/backend-api/codex/responses`; redirects are rejected.
@@ -190,7 +210,7 @@ mode is rejected, so OAuth credentials cannot reach another host and no paid API
 fallback occurs. Explicit `fallbackModels` stay on the subscription transport.
 Project overlays keep the existing scalar inheritance rules; when switching modes,
 explicitly clear incompatible inherited fields (for example `baseUrl = ""`,
-`apiKeyEnv = ""`, `fallbacks = []`, or `authJsonPath = ""` for API-key mode).
+`apiKeyEnv = ""`, `fallbacks = []`, or `authJsonPath = ""` for API-key or OpenCode mode).
 Only subscription `options.reasoning`, `options.text`, and `options.service_tier`
 are accepted; state, tools and saved-prompt options are rejected. Each request
 has complete Assessor evidence, no history/previous response, no tools, and
@@ -212,3 +232,8 @@ and exact model `gpt-6-luna` returned a locally validated RiskAssessment through
 this subscription transport. No credentials were changed and no paid API was used.
 This confirms the tested account/model at that time; other account entitlements
 and future transport changes remain provider-controlled.
+
+The OpenCode owner mode was checked against v2.0.24 source, synthetic CLI/HTTP
+fixtures and the real CLI against an isolated mock credential API. Global export
+called only `/api/info` and `/api/credential`, without loading a project location. The historical live probe above used Codex credentials; it does not
+prove a live OpenCode owner-mode call.

@@ -163,8 +163,8 @@ func assessCommand(request Request, ir ShellIR, options Options, config Config, 
 		label := connectionLabel(index)
 		modelCall := options.ModelCall
 		if modelCall == nil {
-			if connection.AuthMode == "codex" {
-				modelCall = &codexModelCall{authJSONPath: connection.AuthJSONPath, client: http.DefaultClient}
+			if connection.AuthMode == "codex" || connection.AuthMode == "opencode" {
+				modelCall = &codexModelCall{authMode: connection.AuthMode, authJSONPath: connection.AuthJSONPath, client: http.DefaultClient}
 			} else {
 
 				apiKey, err := assessorAPIKey(AssessorConfig{APIKeyEnv: connection.APIKeyEnv})

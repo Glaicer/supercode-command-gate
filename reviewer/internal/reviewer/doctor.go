@@ -1,11 +1,13 @@
 package reviewer
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
+	"time"
 )
 
 // DoctorReport is the startup contract consumed by the OpenCode Command Gate.
@@ -40,8 +42,8 @@ func doctorConnections(config AssessorConfig) []DoctorConnection {
 	result := []DoctorConnection{}
 	for index, connection := range assessorConnections(config) {
 		_, err := assessorAPIKey(AssessorConfig{APIKeyEnv: connection.APIKeyEnv})
-		if connection.AuthMode == "codex" {
-			_, err = loadCodexCredentials(connection.AuthJSONPath)
+		if connection.AuthMode == "codex" || connection.AuthMode == "opencode" {
+			err = validateSubscriptionCredentials(config)
 		}
 		result = append(result, DoctorConnection{Connection: connectionLabel(index), CredentialAvailable: err == nil})
 	}
@@ -98,9 +100,8 @@ func validateAssessorConfiguration(config Config) error {
 		}
 		return nil
 	}
-	if config.Assessor.AuthMode == "codex" {
-		_, err := loadCodexCredentials(config.Assessor.AuthJSONPath)
-		return err
+	if config.Assessor.AuthMode == "codex" || config.Assessor.AuthMode == "opencode" {
+		return validateSubscriptionCredentials(config.Assessor)
 	}
 	available := false
 	for index, connection := range assessorConnections(config.Assessor) {
@@ -116,6 +117,13 @@ func validateAssessorConfiguration(config Config) error {
 	}
 
 	return nil
+}
+
+func validateSubscriptionCredentials(config AssessorConfig) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.TotalTimeoutMs)*time.Millisecond)
+	defer cancel()
+	_, err := loadSubscriptionCredentials(ctx, config.AuthMode, config.AuthJSONPath)
+	return err
 }
 
 func assessorPromptDigest() string {

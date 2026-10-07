@@ -70,6 +70,163 @@ aar doctor
 
 `release.sh` emits static binaries for linux-amd64, linux-arm64, darwin-amd64 and darwin-arm64 plus `SHA256SUMS`. For a single local binary, `go build -o aar ./cmd/aar` is enough. The release binary embeds the pinned Bash parser and has no runtime download or provider SDK dependency. The Reviewer parses and assesses commands, returns a Decision, and writes a redacted audit record; it never executes the command under review. Reviewer configuration is documented below.
 
+## New Reviewer and Gate features
+
+### Persistent reviewed command trust — ticket 13
+
+A successful Assessor Allow for a supported development launch can be reused
+across processes and sessions in the same canonical project. Supported launches
+include exact npm/pnpm scripts and supported local typecheck, lint, format-check
+and test executables. AAR resolves available script bodies, hooks and executable
+inputs before the initial assessment; a script name alone is never approval.
+
+Reuse requires the same command and arguments, invocation environment, package
+scripts, dependency/lockfile inputs, supported configuration, selected executable
+and policy versions. Ordinary source and test edits retain this trust. Changed
+launch inputs, another project, an unsupported launch, a damaged record or an
+expired entry returns to whole-command review. Entries are separate from human
+grants, bounded to 256 per project and usable for 30 days. Every hit still passes
+Hard Deny and native permissions; this is not executable isolation.
+
+Reset reviewed trust explicitly when you want a fresh assessment:
+
+```sh
+aar trust-reset --project /absolute/path/to/project
+```
+
+Reset does not remove human grants or history. A reused Decision has source
+`reviewed-trust` and an `originAuditId` referring to the original assessment;
+with history disabled, that ID remains provenance but need not have a saved record.
+
+### Safe composition of reviewed launches — ticket 14
+
+After individual Allow for `pnpm typecheck` and `pnpm lint`, a covered
+`pnpm typecheck && pnpm lint` can reuse both records without another model call.
+Static `;`, `&&` and `||` chains check every possible branch, including the
+right-hand side of `||`. A chain may mix reviewed launches with deterministic
+policy commands, such as `pnpm typecheck && git status --short`.
+
+Supported development output can pass through policy-safe `head`/`tail`, for
+example `pnpm test | tail -n 20`, including one supported `2>&1` stderr merge.
+Changed stdin, argv, environment, parent cwd, unsupported redirections or output
+consumers prevent reuse. Unknown elements return the entire original program to
+one whole-command assessment; AAR does not audit nodes independently or extract
+individual trust from a previous composite Allow. Hard Deny anywhere still wins.
+Audit provenance lists the covered command indexes and their policy rules or
+original assessment IDs. Statistics count the final composed verdict once.
+
+### Optional history and cleanup — ticket 15
+
+Set `[audit] enabled = false` to stop saving audit JSON and SQLite review history.
+Review decisions, human grants, reviewed trust and aggregate statistics continue
+to work. Existing history is retained until explicitly cleaned; `auditId` does
+not imply that `aar explain` can retrieve a record.
+
+Run `aar cleanup` to clear saved audit and review trace in the effective state
+directory while preserving grants, deny notes, reviewed trust, statistics and
+configuration. Busy stores report an error so cleanup can be retried after active
+checks finish. See [grants and audit settings](#grants-and-audit-settings).
+
+### Aggregate usage statistics — ticket 16
+
+Run `aar stats` to see Processed, policy approvals, fresh/reused LLM approvals,
+human approvals, Denied, Ask, Errors and the accumulation start. One completed
+check counts once; internal model retries and nodes of a composite command do
+not multiply the count. Repeated independent checks count again.
+
+These are Reviewer outcomes, not native executions: an Ask remains Ask even when
+Gate's never-ask mode turns it into a refusal. Counters survive process changes,
+disabled history and `aar cleanup`, and store no command text or project paths.
+There is no historical backfill. Corrupt state is diagnosed; a counter-write
+failure preserves the original review verdict. See
+[the statistics contract](#grants-and-audit-settings).
+
+### ChatGPT subscription through OpenCode — ticket 17
+
+Sign in with the OpenCode harness that runs Gate:
+
+```sh
+opencode auth login openai --method chatgpt-browser
+```
+
+Then configure AAR independently:
+
+```toml
+[assessor]
+authMode = "opencode"
+model = "gpt-6-luna"
+totalTimeoutMs = 20000
+options = { reasoning = { effort = "none" } }
+```
+
+OpenCode v2.0.24 migrates legacy `auth.json` credentials into its database and
+updates that store. AAR therefore uses the public `opencode auth export` CLI,
+selects the active OpenAI ChatGPT OAuth connection, and reloads it on every
+attempt. There is no `authJsonPath` in this mode. OpenCode owns login and refresh;
+AAR never changes its credentials or performs token refresh. If the owner token
+has expired, refresh or sign in through OpenCode before retrying.
+
+The CLI defaults to `opencode` on PATH; set `OPENCODE_BIN` to the harness binary
+when needed. Gate forwards the host's OpenCode config and XDG data/cache paths
+so the CLI uses the same credential store. `aar doctor` checks owner credentials
+through the CLI without a model call or browser login. The CLI uses OpenCode's
+normal server connection and may start its managed service when absent.
+
+Assessments use a fixed ChatGPT subscription endpoint, with no tools, conversation
+history or paid API fallback. Account entitlement and model availability still
+apply. Clear inherited `baseUrl`, `apiKeyEnv`, `authJsonPath` and independent
+`fallbacks` when switching from another mode. The previous explicit
+`authMode = "codex"` file reader remains available for compatibility. See
+[subscription setup and limitations](reviewer/README.md#chatgpt-subscription-authentication).
+
+### Session-scoped operational alerts — ticket 19
+
+When an operational failure blocks a command, the connected TUI shows a
+dismissible **Command Gate unavailable** alert for that session and location.
+Known Assessor failure facts identify the Assessor; missing facts produce a
+generic diagnostic. Policy Deny, disabled approval prompts and human cancellation
+do not become outage alerts.
+
+Closing the alert does not approve or execute anything. Repeated failures share
+one alert until that component has actually recovered; policy Allow alone cannot
+prove Assessor recovery. Late RPC replies cannot show another session's alert.
+Without a TUI, the command still receives its operational tool error. See
+[failures and cancellation](#failures-and-cancellation).
+
+### Independent provider fallback — ticket 20
+
+Configure ordered API-key connections with their own endpoint, model, credential
+variable and options, so an unavailable primary provider can fall back to another:
+
+```toml
+[assessor]
+model = "primary-model"
+baseUrl = "https://provider-a.example/v1"
+apiKeyEnv = "PROVIDER_A_KEY"
+totalTimeoutMs = 5000
+
+[[assessor.fallbacks]]
+model = "fallback-model"
+baseUrl = "https://provider-b.example/v1"
+apiKeyEnv = "PROVIDER_B_KEY"
+```
+
+Each connection receives only its own credential. Missing credentials, transport
+failures, invalid assessments or insufficient context capacity can advance to the
+next connection within one shared deadline. A validated RiskAssessment ends the
+chain even when its verdict is Ask or Deny; fallback does not search for a more
+permissive answer. Hard Deny and approval policy stay authoritative.
+
+Fallback endpoint/key/options do not inherit primary values. A project fallback
+array replaces the global array; `fallbacks = []` clears it. Legacy
+`fallbackModels` changes only the model on the primary connection and cannot be
+combined with nonempty `fallbacks`. See the
+[complete fallback settings](reviewer/README.md#independent-assessor-providers).
+
+Ticket 18's transcript approval label remains blocked: the public OpenCode
+v2.0.24 UI has no call-bound slot before a native command block. Operational
+alerts are a separate feature and do not substitute for that label.
+
 ## Reviewer configuration
 
 The Reviewer uses the first existing file from `$AAR_CONFIG`,
@@ -121,18 +278,22 @@ not test a live model response.
 
 ### Assessor settings
 
-| Key in `[assessor]` | Default  | Meaning                                                                                                            |
-| ------------------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
-| `model`             | Unset    | Primary model identifier sent to the endpoint.                                                                     |
-| `fallbackModels`    | `[]`     | Backup model identifiers for subsequent attempts.                                                                  |
-| `baseUrl`           | Unset    | OpenAI-compatible API URL; `/chat/completions` is appended unless already present. Remote endpoints require HTTPS. |
-| `apiKeyEnv`         | Unset    | Environment variable name containing the API credential.                                                           |
-| `totalTimeoutMs`    | `5000`   | Total assessment time budget in milliseconds, including fallback attempts.                                         |
-| `onUnavailable`     | `"deny"` | `"deny"` or `"ask"` when assessment cannot be completed, including invalid model responses.                        |
+| Key in `[assessor]` | Default     | Meaning                                                                                                            |
+| ------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------ |
+| `authMode`          | `"api-key"` | `"opencode"` uses the active OpenCode ChatGPT connection; `"codex"` reads an explicit Codex file.                  |
+| `authJsonPath`      | Unset       | Absolute private Codex credential file; only for `authMode = "codex"`.                                             |
+| `fallbacks`         | `[]`        | Ordered independent API-key provider connections; incompatible with subscription modes.                            |
+| `model`             | Unset       | Primary model identifier sent to the endpoint.                                                                     |
+| `fallbackModels`    | `[]`        | Backup model identifiers for subsequent attempts.                                                                  |
+| `baseUrl`           | Unset       | OpenAI-compatible API URL; `/chat/completions` is appended unless already present. Remote endpoints require HTTPS. |
+| `apiKeyEnv`         | Unset       | Environment variable name containing the API credential.                                                           |
+| `totalTimeoutMs`    | `5000`      | Total assessment time budget in milliseconds, including fallback attempts.                                         |
+| `onUnavailable`     | `"deny"`    | `"deny"` or `"ask"` when assessment cannot be completed, including invalid model responses.                        |
 
 Without an assessor model, deterministic review remains available. Commands
 requiring model assessment use the unavailable action. When configuring a
-model, provide its endpoint and credential environment variable.
+API-key model, provide its endpoint and credential environment variable.
+Subscription setup uses the separate auth modes described above.
 
 `[assessor.options]` passes additional fields to the API request, such as
 `temperature`; support depends on the endpoint. AAR supplies `model` and

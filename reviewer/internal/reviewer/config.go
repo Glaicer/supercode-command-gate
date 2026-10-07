@@ -173,19 +173,25 @@ func projectConfigPath(request Request) string {
 
 func normalizeConfig(config Config) (Config, error) {
 	defaults := defaultConfig()
-	if config.Assessor.AuthMode != "" && config.Assessor.AuthMode != "api-key" && config.Assessor.AuthMode != "codex" {
-		return Config{}, errors.New("assessor.authMode must be api-key or codex")
+	if config.Assessor.AuthMode != "" && config.Assessor.AuthMode != "api-key" && config.Assessor.AuthMode != "codex" && config.Assessor.AuthMode != "opencode" {
+		return Config{}, errors.New("assessor.authMode must be api-key, opencode, or codex")
 	}
-	if config.Assessor.AuthMode == "codex" {
-		if config.Assessor.Model == "" || !filepath.IsAbs(config.Assessor.AuthJSONPath) {
-			return Config{}, errors.New("codex assessor requires model and absolute authJsonPath")
+	if config.Assessor.AuthMode == "codex" || config.Assessor.AuthMode == "opencode" {
+		if config.Assessor.Model == "" {
+			return Config{}, errors.New("subscription assessor requires model")
+		}
+		if config.Assessor.AuthMode == "codex" && !filepath.IsAbs(config.Assessor.AuthJSONPath) {
+			return Config{}, errors.New("codex assessor requires absolute authJsonPath")
+		}
+		if config.Assessor.AuthMode == "opencode" && config.Assessor.AuthJSONPath != "" {
+			return Config{}, errors.New("opencode assessor reads current credentials through the CLI, not authJsonPath")
 		}
 		if config.Assessor.BaseURL != "" || config.Assessor.APIKeyEnv != "" || len(config.Assessor.Fallbacks) > 0 {
-			return Config{}, errors.New("codex assessor cannot configure baseUrl, apiKeyEnv, or independent paid API fallbacks")
+			return Config{}, errors.New("subscription assessor cannot configure baseUrl, apiKeyEnv, or independent paid API fallbacks")
 		}
 		for key := range config.Assessor.Options {
 			if key != "reasoning" && key != "text" && key != "service_tier" {
-				return Config{}, errors.New("codex assessor options support only reasoning, text, and service_tier")
+				return Config{}, errors.New("subscription assessor options support only reasoning, text, and service_tier")
 			}
 		}
 	} else if config.Assessor.AuthJSONPath != "" {

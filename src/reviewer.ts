@@ -80,6 +80,10 @@ export function reviewerEnvironment(request: {
     "XDG_STATE_HOME",
     "AAR_CONFIG",
     "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "OPENCODE_CONFIG_DIR",
+    "OPENCODE_BIN",
   ]) {
     const value = process.env[key];
     if (typeof value === "string") env[key] = value;
