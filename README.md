@@ -173,9 +173,10 @@ through the CLI without a model call or browser login. The CLI uses OpenCode's
 normal server connection and may start its managed service when absent.
 
 Assessments use a fixed ChatGPT subscription endpoint, with no tools, conversation
-history or paid API fallback. Account entitlement and model availability still
-apply. Clear inherited `baseUrl`, `apiKeyEnv`, `authJsonPath` and independent
-`fallbacks` when switching from another mode. The previous explicit
+history or implicit paid API fallback. An explicitly configured API-key fallback
+is supported with `authMode = "opencode"`; it uses its own endpoint and key.
+Account entitlement and model availability still apply. Clear inherited primary
+`baseUrl`, `apiKeyEnv` and `authJsonPath` when switching from another mode. The previous explicit
 `authMode = "codex"` file reader remains available for compatibility. See
 [subscription setup and limitations](reviewer/README.md#chatgpt-subscription-authentication).
 
@@ -278,17 +279,17 @@ not test a live model response.
 
 ### Assessor settings
 
-| Key in `[assessor]` | Default     | Meaning                                                                                                            |
-| ------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------ |
-| `authMode`          | `"api-key"` | `"opencode"` uses the active OpenCode ChatGPT connection; `"codex"` reads an explicit Codex file.                  |
-| `authJsonPath`      | Unset       | Absolute private Codex credential file; only for `authMode = "codex"`.                                             |
-| `fallbacks`         | `[]`        | Ordered independent API-key provider connections; incompatible with subscription modes.                            |
-| `model`             | Unset       | Primary model identifier sent to the endpoint.                                                                     |
-| `fallbackModels`    | `[]`        | Backup model identifiers for subsequent attempts.                                                                  |
-| `baseUrl`           | Unset       | OpenAI-compatible API URL; `/chat/completions` is appended unless already present. Remote endpoints require HTTPS. |
-| `apiKeyEnv`         | Unset       | Environment variable name containing the API credential.                                                           |
-| `totalTimeoutMs`    | `5000`      | Total assessment time budget in milliseconds, including fallback attempts.                                         |
-| `onUnavailable`     | `"deny"`    | `"deny"` or `"ask"` when assessment cannot be completed, including invalid model responses.                        |
+| Key in `[assessor]` | Default     | Meaning                                                                                                                           |
+| ------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `authMode`          | `"api-key"` | `"opencode"` uses the active OpenCode ChatGPT connection; `"codex"` reads an explicit Codex file.                                 |
+| `authJsonPath`      | Unset       | Absolute private Codex credential file; only for `authMode = "codex"`.                                                            |
+| `fallbacks`         | `[]`        | Ordered independent API-key provider connections; also supported after an OpenCode subscription primary; Codex mode rejects them. |
+| `model`             | Unset       | Primary model identifier sent to the endpoint.                                                                                    |
+| `fallbackModels`    | `[]`        | Backup model identifiers for subsequent attempts.                                                                                 |
+| `baseUrl`           | Unset       | OpenAI-compatible API URL; `/chat/completions` is appended unless already present. Remote endpoints require HTTPS.                |
+| `apiKeyEnv`         | Unset       | Environment variable name containing the API credential.                                                                          |
+| `totalTimeoutMs`    | `5000`      | Total assessment time budget in milliseconds, including fallback attempts.                                                        |
+| `onUnavailable`     | `"deny"`    | `"deny"` or `"ask"` when assessment cannot be completed, including invalid model responses.                                       |
 
 Without an assessor model, deterministic review remains available. Commands
 requiring model assessment use the unavailable action. When configuring a

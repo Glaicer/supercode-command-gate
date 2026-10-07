@@ -182,7 +182,6 @@ func TestOpenCodeSubscriptionRejectsForeignTransportConfiguration(t *testing.T) 
 		{Model: "m", AuthMode: "opencode", AuthJSONPath: "/synthetic/auth.json"},
 		{Model: "m", AuthMode: "opencode", BaseURL: "https://foreign.invalid"},
 		{Model: "m", AuthMode: "opencode", APIKeyEnv: "KEY"},
-		{Model: "m", AuthMode: "opencode", Fallbacks: []reviewer.AssessorConnection{{Model: "m", BaseURL: "https://paid.invalid", APIKeyEnv: "KEY"}}},
 		{Model: "m", AuthMode: "opencode", Options: map[string]any{"tools": []any{"shell"}}},
 	} {
 		config := reviewer.Config{Assessor: assessor}
@@ -190,5 +189,60 @@ func TestOpenCodeSubscriptionRejectsForeignTransportConfiguration(t *testing.T) 
 		if err == nil {
 			t.Fatal("foreign subscription configuration accepted")
 		}
+	}
+}
+
+func TestOpenCodeSubscriptionExplicitAPIFallback(t *testing.T) {
+	for _, mode := range []string{"expired", "rejected", "valid"} {
+		t.Run(mode, func(t *testing.T) {
+			expiry := time.Now().Add(time.Hour)
+			if mode == "expired" {
+				expiry = time.Now().Add(-time.Minute)
+			}
+			openCodeAuthFixture(t, expiry, "")
+			t.Setenv("SYNTHETIC_HYPER_KEY", "hyper-secret")
+			original := http.DefaultClient
+			defer func() { http.DefaultClient = original }()
+			primary, fallback := 0, 0
+			http.DefaultClient = &http.Client{Transport: subscriptionHTTP(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Host == "chatgpt.com" {
+					primary++
+					if strings.Contains(req.Header.Get("Authorization"), "hyper-secret") {
+						t.Fatal("Hyper credential reached subscription")
+					}
+					if mode == "rejected" {
+						return &http.Response{StatusCode: 401, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
+					}
+					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"{\\\"risks\\\":[],\\\"uncertainties\\\":[]}\"}]}]}}\n\n")), Header: http.Header{}}, nil
+				}
+				fallback++
+				if req.URL.String() != "https://hyper.example/v1/chat/completions" || req.Header.Get("Authorization") != "Bearer hyper-secret" || req.Header.Get("ChatGPT-Account-ID") != "" {
+					t.Fatal("mixed provider credentials")
+				}
+				var body map[string]any
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if body["model"] != "glm-5.3-flash" || body["reasoning"] != nil {
+					t.Fatal("fallback inherited primary settings")
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"{\"risks\":[],\"uncertainties\":[]}"}}]}`)), Header: http.Header{}}, nil
+			})}
+			config := reviewer.Config{Assessor: reviewer.AssessorConfig{Model: "gpt-6-luna", AuthMode: "opencode", Options: map[string]any{"reasoning": map[string]any{"effort": "none"}}, Fallbacks: []reviewer.AssessorConnection{{Model: "glm-5.3-flash", BaseURL: "https://hyper.example/v1", APIKeyEnv: "SYNTHETIC_HYPER_KEY"}}}}
+			report, err := reviewer.Doctor(assessorRequest(t, "touch ./output"), reviewer.Options{StateDir: t.TempDir(), Config: &config})
+			if err != nil || len(report.Connections) != 2 || !report.Connections[1].CredentialAvailable {
+				t.Fatalf("doctor=%#v err=%v", report, err)
+			}
+			decision, err := reviewer.Check(assessorRequest(t, "touch ./output"), reviewer.Options{StateDir: t.TempDir(), Config: &config})
+			if err != nil || decision.Source != reviewer.SourceAssessor || decision.Decision != reviewer.DecisionAllow {
+				t.Fatalf("decision=%#v err=%v", decision, err)
+			}
+			if mode == "valid" && (primary != 1 || fallback != 0) {
+				t.Fatalf("valid assessment did not stop chain: %d/%d", primary, fallback)
+			}
+			if mode != "valid" && fallback != 1 {
+				t.Fatalf("missing explicit fallback: %d", fallback)
+			}
+		})
 	}
 }

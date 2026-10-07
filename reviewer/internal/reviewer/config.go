@@ -186,8 +186,8 @@ func normalizeConfig(config Config) (Config, error) {
 		if config.Assessor.AuthMode == "opencode" && config.Assessor.AuthJSONPath != "" {
 			return Config{}, errors.New("opencode assessor reads current credentials through the CLI, not authJsonPath")
 		}
-		if config.Assessor.BaseURL != "" || config.Assessor.APIKeyEnv != "" || len(config.Assessor.Fallbacks) > 0 {
-			return Config{}, errors.New("subscription assessor cannot configure baseUrl, apiKeyEnv, or independent paid API fallbacks")
+		if config.Assessor.BaseURL != "" || config.Assessor.APIKeyEnv != "" || (config.Assessor.AuthMode == "codex" && len(config.Assessor.Fallbacks) > 0) {
+			return Config{}, errors.New("subscription assessor cannot configure primary baseUrl/apiKeyEnv; independent API fallbacks require opencode authMode")
 		}
 		for key := range config.Assessor.Options {
 			if key != "reasoning" && key != "text" && key != "service_tier" {
@@ -215,7 +215,7 @@ func normalizeConfig(config Config) (Config, error) {
 			return Config{}, fmt.Errorf("assessor.fallbacks[%d]: %w", index, err)
 		}
 	}
-	if len(config.Assessor.Fallbacks) > 0 {
+	if len(config.Assessor.Fallbacks) > 0 && config.Assessor.AuthMode != "opencode" {
 		if strings.TrimSpace(config.Assessor.Model) == "" {
 			return Config{}, errors.New("assessor.model is required")
 		}

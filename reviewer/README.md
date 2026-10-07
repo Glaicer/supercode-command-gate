@@ -205,9 +205,13 @@ the subscription server verifies credentials and account/model access.
 
 Subscription requests go only to
 `https://chatgpt.com/backend-api/codex/responses`; redirects are rejected.
-Configuration of `baseUrl`, `apiKeyEnv` or independent API `fallbacks` in this
-mode is rejected, so OAuth credentials cannot reach another host and no paid API
-fallback occurs. Explicit `fallbackModels` stay on the subscription transport.
+Primary `baseUrl` and `apiKeyEnv` are rejected, so OAuth credentials cannot
+reach another host. `authMode = "opencode"` supports explicitly configured API-key
+`fallbacks`: each uses its own endpoint, key and options. A missing/expired owner
+credential can fall back, and Doctor succeeds when at least one connection is
+ready. This can incur separate API billing; without explicit configuration there
+is no paid API fallback. Legacy Codex mode still rejects independent API
+fallbacks. Explicit `fallbackModels` stay on the subscription transport.
 Project overlays keep the existing scalar inheritance rules; when switching modes,
 explicitly clear incompatible inherited fields (for example `baseUrl = ""`,
 `apiKeyEnv = ""`, `fallbacks = []`, or `authJsonPath = ""` for API-key or OpenCode mode).

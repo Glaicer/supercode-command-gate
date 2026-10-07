@@ -100,11 +100,14 @@ func validateAssessorConfiguration(config Config) error {
 		}
 		return nil
 	}
-	if config.Assessor.AuthMode == "codex" || config.Assessor.AuthMode == "opencode" {
-		return validateSubscriptionCredentials(config.Assessor)
-	}
 	available := false
+	var subscriptionErr error
 	for index, connection := range assessorConnections(config.Assessor) {
+		if connection.AuthMode == "codex" || connection.AuthMode == "opencode" {
+			subscriptionErr = validateSubscriptionCredentials(config.Assessor)
+			available = available || subscriptionErr == nil
+			continue
+		}
 		if _, err := chatCompletionsURL(connection.BaseURL); err != nil {
 			return fmt.Errorf("%s: %w", connectionLabel(index), err)
 		}
@@ -113,6 +116,9 @@ func validateAssessorConfiguration(config Config) error {
 		}
 	}
 	if !available {
+		if subscriptionErr != nil {
+			return subscriptionErr
+		}
 		return errors.New("all assessor connection credentials are unavailable")
 	}
 
