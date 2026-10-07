@@ -48,7 +48,7 @@ test("real OpenCode runs pwd and does not run a denied command", async () => {
     binary,
     command: `touch ${sideEffect}`,
     assertResult({ combined, modelCalls }) {
-      assert.equal(combined.includes("Auto Approve Permissions blocked this command"), true)
+      assert.equal(combined.includes("Command Gate blocked this command"), true)
       assert.equal(combined.includes("not executed"), true)
       const toolResults = modelCalls.flatMap((call) => call.toolResults ?? []).map(String)
       assert.equal(toolResults.some((result) => result.includes("not executed")), true)
@@ -185,7 +185,7 @@ test("real OpenCode keeps reviewer failures fail-closed and preserves reviewed b
     gateConfig: { tools: ["shell"] },
     assertResult({ combined, reviewerCalls }) {
       assert.equal(reviewerCalls.length, 0)
-      assert.doesNotMatch(combined, /Auto Approve Permissions blocked this command/i)
+      assert.doesNotMatch(combined, /Command Gate blocked this command/i)
     },
   })
   await access(filteredSideEffect, constants.F_OK)

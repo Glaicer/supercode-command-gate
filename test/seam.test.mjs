@@ -285,13 +285,16 @@ test("native permissions stay authoritative and the shell Decision authorizes no
   const native = find(evidence.main, "native-deny");
   assert.equal(native.marker, false);
   assert.ok(native.events.some((item) => item.kind === "review-allow"));
-  assert.doesNotMatch(native.toolResult, /Auto Approve Permissions blocked/i);
+  assert.doesNotMatch(native.toolResult, /Command Gate blocked this command/i);
   assert.match(native.toolResult, /denied|permission|not allowed/i);
 
   const external = find(evidence.main, "external-dir");
   assert.equal(external.marker, false);
   assert.ok(external.events.some((item) => item.kind === "review-allow"));
-  assert.doesNotMatch(external.toolResult, /Auto Approve Permissions blocked/i);
+  assert.doesNotMatch(
+    external.toolResult,
+    /Command Gate blocked this command/i,
+  );
   assert.match(external.toolResult, /denied|permission|not allowed/i);
 
   const other = find(evidence.main, "other-location");

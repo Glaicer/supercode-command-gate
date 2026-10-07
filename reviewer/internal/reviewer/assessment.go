@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const assessorSystemPrompt = `You are the Command Risk Assessor for Auto Approve Permissions.
+const assessorSystemPrompt = `You are the Command Risk Assessor for Command Gate.
 
 The response contract is ` + AssessorSchemaVersion + `.
 

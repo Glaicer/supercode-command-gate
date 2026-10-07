@@ -99,7 +99,7 @@ function createCommandGate(options = {}) {
 
         const reason = compactReason(decision.reason || "the command was not proven safe")
         throw new Error(
-          `Auto Approve Permissions blocked this command. Reason: ${reason}. The command was not executed.`,
+          `Command Gate blocked this command. Reason: ${reason}. The command was not executed.`,
         )
       },
       event: async ({ event }) => {
@@ -280,7 +280,7 @@ export const CommandGatePlugin = Object.assign(commandGatePlugin, {
 async function checkRuntimeCompatibility(options = {}) {
   const platform = options.platform ?? process.platform
   if (platform === "win32") {
-    return { ok: false, reason: "Windows execution is unsupported in Auto Approve Permissions v1" }
+    return { ok: false, reason: "Windows execution is unsupported in Command Gate" }
   }
   if (typeof options.runtimeCheck === "function") {
     try {
@@ -420,7 +420,7 @@ function normalizeDoctorResult(result, config) {
 
 async function announceStartupFailure(context, reason) {
   const message = `Command Gate is unavailable: ${reason}. Fix the installation or configuration, then restart OpenCode after \`aar doctor\` passes. Bash commands remain denied.`
-  console.error(`[Auto Approve Permissions] ${message}`)
+  console.error(`[Command Gate] ${message}`)
   const showToast = context?.client?.tui?.showToast
   if (typeof showToast !== "function") return
   try {
@@ -831,7 +831,7 @@ async function bestEffortDenyNote(sessionID, fingerprint, config, options) {
 function approvalRequired(request, decision) {
   const reason = compactReason(decision.reason || "the command needs human approval")
   return new Error(
-    `Auto Approve Permissions blocked this command. Reason: ${reason}. Human approval is required; call ${APPROVAL_TOOL} with requestFingerprint ${JSON.stringify(decision.requestFingerprint)}, command exactly ${JSON.stringify(request.command)}, and a one-line purpose. The command was not executed.`,
+    `Command Gate blocked this command. Reason: ${reason}. Human approval is required; call ${APPROVAL_TOOL} with requestFingerprint ${JSON.stringify(decision.requestFingerprint)}, command exactly ${JSON.stringify(request.command)}, and a one-line purpose. The command was not executed.`,
   )
 }
 
@@ -1235,5 +1235,5 @@ function errorMessage(error) {
 }
 
 function reviewerFailure(reason) {
-  return new Error(`Auto Approve Permissions blocked this command. Reason: ${reason}. The command was not executed.`)
+  return new Error(`Command Gate blocked this command. Reason: ${reason}. The command was not executed.`)
 }
