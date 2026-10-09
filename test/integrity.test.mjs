@@ -33,6 +33,22 @@ test("native background edited after tool-before refusal still cannot start", ()
   );
 });
 
+test("late background flag mutations under allowBackground refuse before native start", () => {
+  const boot = evidence.integrityBackground;
+  assert.equal(boot.inventoryOK, true);
+  for (const name of ["late-background-true", "late-background-false"]) {
+    const result = boot.cases.find((item) => item.name === name);
+    assert.equal(result.marker, false, name);
+    assert.equal(result.finished, true, name);
+    assert.match(
+      result.toolResult,
+      /late mutation changed reviewed invocation background/i,
+      name,
+    );
+    assert.match(result.toolResult, /command was not executed/i, name);
+  }
+});
+
 test("controlled late shell command, cwd, env and shell mutations refuse before native start", async () => {
   for (const name of ["command", "cwd", "env", "replace-env", "shell"]) {
     const result = evidence.integrity.cases.find(
