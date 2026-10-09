@@ -35,6 +35,10 @@ will not contain a deliberately malicious agent, it doesn't audit every file
 or dependency a command may touch, and it doesn't sandbox execution. For real
 isolation, pair it with a sandbox such as bubblewrap.
 
+Background invocations are refused by default. With `allowBackground` on, they
+are reviewed like any other command — but the Gate does not contain, supervise
+or clean up background processes once the host starts them.
+
 ## Two parts
 
 | Part                      | What it is                                                                                                                                                               |
@@ -104,6 +108,7 @@ protectedPaths = ["/important/data"]     # paths to protect during review
 | `timeoutMs`         | `5500`        | Deadline for one review, in milliseconds.                                                      |
 | `onReviewerFailure` | `deny`        | If the reviewer itself fails: `deny`, or let the command through unreviewed (`passthrough`).   |
 | `enabled`           | `true`        | Set `false` to keep the plugin installed but off.                                              |
+| `allowBackground`   | `false`       | Review invocations with `background: true` instead of refusing them upfront.                   |
 
 By default there are no popups: a command that would need your approval is
 simply refused. If you'd rather decide yourself, set `approvalMode` to
