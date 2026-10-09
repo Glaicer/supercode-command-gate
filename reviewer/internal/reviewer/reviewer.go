@@ -26,6 +26,7 @@ type auditRecord struct {
 	RecordedAt         string             `json:"recordedAt"`
 	Command            string             `json:"command"`
 	CWD                string             `json:"cwd"`
+	Background         bool               `json:"background,omitempty"`
 	Decision           string             `json:"decision"`
 	Outcome            string             `json:"outcome"`
 	Source             string             `json:"source"`
@@ -96,6 +97,7 @@ func Check(request Request, options Options) (result Decision, resultErr error) 
 	log.record("received", map[string]any{
 		"command": request.Command, "cwd": request.CWD,
 		"sessionId": request.Session.ID, "intentId": request.Session.IntentID,
+		"background": request.Background,
 	})
 
 	if requestErr != nil {
@@ -319,6 +321,7 @@ type fingerprintInput struct {
 	Command       string  `json:"command"`
 	CWD           string  `json:"cwd"`
 	WorkspaceRoot *string `json:"workspaceRoot"`
+	Background    bool    `json:"background,omitempty"`
 	SessionID     string  `json:"sessionId"`
 	IntentID      string  `json:"intentId"`
 	PolicyVersion string  `json:"policyVersion"`
@@ -330,6 +333,7 @@ func fingerprintFor(request Request) string {
 		Command:       request.Command,
 		CWD:           request.CWD,
 		WorkspaceRoot: request.WorkspaceRoot,
+		Background:    request.Background,
 		SessionID:     request.Session.ID,
 		IntentID:      request.Session.IntentID,
 		PolicyVersion: DeterministicPolicyVersion,
@@ -373,6 +377,7 @@ type factFingerprintInput struct {
 	Purpose            string              `json:"purpose"`
 	AssistantRationale string              `json:"assistantRationale,omitempty"`
 	TrustedEnv         map[string]string   `json:"trustedEnv"`
+	Background         bool                `json:"background,omitempty"`
 	RequestSchema      string              `json:"requestSchema"`
 	DecisionSchema     string              `json:"decisionSchema"`
 	ShellIRSchema      string              `json:"shellIRSchema"`
@@ -426,6 +431,7 @@ func fingerprintForFacts(request Request, local localAssessmentContext, config C
 		Purpose:            request.Intent.Purpose,
 		AssistantRationale: request.Intent.AssistantRationale,
 		TrustedEnv:         trustedEnvSnapshot(request.Env),
+		Background:         request.Background,
 		RequestSchema:      request.SchemaVersion,
 		DecisionSchema:     DecisionSchemaVersion,
 		ShellIRSchema:      ShellIRSchemaVersion,
@@ -484,6 +490,7 @@ func writeAudit(request Request, decision Decision, options Options, config Conf
 		RecordedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 		Command:            redact(request.Command),
 		CWD:                redact(request.CWD),
+		Background:         request.Background,
 		Decision:           decision.Decision,
 		Outcome:            auditOutcome(decision.Source),
 		Source:             decision.Source,

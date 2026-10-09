@@ -10,6 +10,7 @@ type Request struct {
 	CWD                string            `json:"cwd"`
 	WorkspaceRoot      *string           `json:"workspaceRoot"`
 	Env                map[string]string `json:"env"`
+	Background         bool              `json:"background,omitempty"`
 	Session            Session           `json:"session"`
 	Intent             Intent            `json:"intent"`
 }
