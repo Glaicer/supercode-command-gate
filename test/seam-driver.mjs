@@ -30,9 +30,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const gateDir = path.dirname(here);
 const opencode =
   process.env.OPENCODE_BIN ?? "/home/glaicer/.opencode/bin/opencode";
-const reviewer =
-  process.env.AAR_SOURCE ??
-  "/home/glaicer/Development/Personal/Supercode-dev/plugins/auto-approval-reviewer";
+const reviewer = process.env.AAR_SOURCE ?? path.join(gateDir, "reviewer");
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const COMPOUND_COMMAND = [
@@ -50,8 +48,9 @@ export async function runSeam(options = {}) {
   const version = (await exec(opencode, ["--version"])).stdout
     .trim()
     .replace(/^opencode v/, "");
-  if (version !== "2.0.22")
-    throw Error(`Expected OpenCode 2.0.22, got ${version}`);
+  const expectedVersion = options.expectedVersion ?? "2.0.22";
+  if (version !== expectedVersion)
+    throw Error(`Expected OpenCode ${expectedVersion}, got ${version}`);
   const root =
     process.env.SEAM_ROOT ??
     (await mkdtemp("/tmp/opencode/command-gate-seam-"));
@@ -122,7 +121,9 @@ export async function runSeam(options = {}) {
           });
         const uncertainties = readableDenial
           ? ["Backup availability is unknown", "Remote behavior is unknown"]
-          : [];
+          : text.includes("compound-all.marker")
+            ? ["Deterministic fixture uncertainty"]
+            : [];
         if (text.includes("COMMAND_GATE_LONG_COMMAND")) {
           risks.push({
             ...risk,
@@ -153,6 +154,7 @@ export async function runSeam(options = {}) {
       const scenario = cases.find((item) =>
         new RegExp(`CASE ${item.name}(?![\\w-])`).test(text),
       );
+      if (scenario?.stabilizeMs) await delay(scenario.stabilizeMs);
       const toolResults = body.messages
         .filter((message) => message.role === "tool")
         .map((message) => message.content);
@@ -491,6 +493,88 @@ exec '${aar}' "$@"
         JSON.stringify(evidence, null, 2),
       );
       console.log(`Cancellation evidence: ${root}/results.json`);
+      return evidence;
+    }
+    if (options.unavailableAlerts) {
+      const bootRoot = `${root}/unavailable`;
+      const fixture = `${here}/unavailable-reviewer.mjs`;
+      const series = (name, commands) => ({
+        stabilizeMs: 200,
+        name,
+        call: { tool: "shell", arguments: { command: commands[0] } },
+        commands,
+        repeat: commands.length,
+        marker: `${name}.marker`,
+        expectMarker: false,
+      });
+      cases = options.tuiUnavailable
+        ? [
+            {
+              ...series("unavailable-ui", [
+                "touch unavailable-ui.marker assessor-fail",
+              ]),
+              human: true,
+            },
+          ]
+        : [
+            series("assessor-outages", [
+              "touch assessor-outages.marker assessor-fail",
+              "touch assessor-outages.marker assessor-fail",
+              "pwd",
+              "touch assessor-outages.marker assessor-fail",
+              "printf recovery",
+              "touch assessor-outages.marker assessor-fail",
+            ]),
+            series("transport-outages", [
+              "touch transport-outages.marker transport-fail",
+              "touch transport-outages.marker transport-fail",
+              "pwd",
+              "touch transport-outages.marker transport-fail",
+            ]),
+            series("unavailable-ask", [
+              "touch unavailable-ask.marker assessor-ask",
+            ]),
+            series("policy-refusal", [
+              "touch policy-refusal.marker policy-deny",
+              "touch policy-refusal.marker policy-ask",
+            ]),
+          ];
+      evidence.unavailable = await boot({
+        name: "unavailable",
+        root: bootRoot,
+        baseURL,
+        binaryPath: fixture,
+        modelRequests,
+        cases,
+        unavailableAlerts: true,
+        tuiUnavailable: options.tuiUnavailable,
+        human: options.tuiUnavailable,
+      });
+      if (!options.tuiUnavailable) {
+        const fresh = {
+          ...series("fresh-unavailable", [
+            "touch fresh-unavailable.marker fresh-fail",
+          ]),
+          approval: "once",
+          adapter: true,
+        };
+        cases = [fresh];
+        evidence.freshUnavailable = await boot({
+          name: "fresh-unavailable",
+          root: `${root}/fresh-unavailable`,
+          baseURL,
+          binaryPath: fixture,
+          modelRequests,
+          cases,
+          unavailableAlerts: true,
+          adapterControl: true,
+          pluginOptions: { approvalMode: "interactive" },
+        });
+      }
+      await writeFile(
+        `${root}/results.json`,
+        JSON.stringify(evidence, null, 2),
+      );
       return evidence;
     }
     if (options.failures) {
@@ -1108,7 +1192,7 @@ async function bootHost(config) {
   const binaryPath = config.binaryPath ?? config.aar;
   await writeFile(
     `${root}/aar.toml`,
-    `[assessor]\nmodel = "seam"\nbaseUrl = "${config.baseURL}"\nonUnavailable = "deny"\n`,
+    `[policy]\nprofile = "balanced"\n[assessor]\nmodel = "seam"\nbaseUrl = "${config.baseURL}"\nonUnavailable = "deny"\n`,
   );
   await writeFile(
     `${root}/config/opencode/cli.json`,
@@ -1356,12 +1440,18 @@ async function bootHost(config) {
           `#!/bin/sh\ntrap ${quote(`touch ${quote(`${root}/human-tui.closed`)}`)} EXIT\n${config.longHuman ? `stty size > ${quote(`${root}/human-terminal-size.txt`)}\n` : ""}env -i ${assignments} ${quote(opencode)} --server http://127.0.0.1:${port} --session ${quote(sessionID)} ${quote(directory)}\n`,
         );
         console.log(
-          config.tuiActions || config.layout
+          config.tuiActions || config.layout || config.tuiUnavailable
             ? `Automated TUI fixture: ${root}/launch-tui.sh`
             : config.longHuman
               ? `Human long-command TUI: sh ${root}/launch-tui.sh; inspect Details and every Full command page, return using Actions (Escape dismisses the entire request), select Allow once on the FIRST request, then Deny on the SECOND request, and exit.`
               : `Human TUI: sh ${root}/launch-tui.sh; choose Allow once twice for human-once, Trust exact for session for human-session, then Deny for human-deny, and exit.`,
         );
+        if (config.tuiUnavailable)
+          layoutCapture = exec("python3", [
+            `${here}/tui-unavailable.py`,
+            `${root}/launch-tui.sh`,
+            root,
+          ]);
         if (config.tuiActions)
           layoutCapture = exec("python3", [
             `${here}/tui-actions.py`,
@@ -1471,7 +1561,10 @@ async function bootHost(config) {
           if (pending) break;
           await delay(50);
         }
-        if (!pending) throw Error(`No pending approval for ${scenario.name}`);
+        if (!pending)
+          throw Error(
+            `No pending approval for ${scenario.name}: ${JSON.stringify(await api("GET", `/api/session/${sessionID}/context`))}`,
+          );
         const input = {
           clientID,
           pendingID: pending.pendingID,
@@ -1646,6 +1739,9 @@ async function bootHost(config) {
         pending,
         reply,
         remaining,
+        ...(config.unavailableAlerts
+          ? { alerts: await rpc("alerts", { sessionID }) }
+          : {}),
         maxPending: scenario.watchPending ? maxPending : null,
         sideEffect: marker ? await readFile(markerPath, "utf8") : null,
         marker,
@@ -1729,6 +1825,9 @@ async function bootHost(config) {
       canonicalWorkdir: await realpath(`${root}/project/other`).catch(
         () => null,
       ),
+      unavailableUI: config.tuiUnavailable
+        ? JSON.parse(await readFile(`${root}/unavailable-ui.json`, "utf8"))
+        : null,
       layout: config.layout
         ? JSON.parse(await readFile(`${root}/tui-layout.json`, "utf8"))
         : null,

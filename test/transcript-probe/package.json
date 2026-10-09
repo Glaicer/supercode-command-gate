@@ -1,0 +1,7 @@
+{
+  "name": "command-gate-transcript-surface-probe",
+  "type": "module",
+  "exports": {
+    "./tui": "./tui.js"
+  }
+}

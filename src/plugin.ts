@@ -37,6 +37,11 @@ import {
 } from "./state.ts";
 import type { Intent } from "./state.ts";
 import { ApprovalQueue, type ApprovalReply } from "./approval.ts";
+import {
+  UnavailableAlerts,
+  safeOperationalReason,
+  unavailableDecisionAlert,
+} from "./unavailable.ts";
 import { Approvals } from "./rpc.ts";
 
 const BoundCallRef = Context.Reference<CallIdentity | null>(
@@ -193,6 +198,18 @@ export default Plugin.define({
         );
 
       let changed = false;
+      const unavailableAlerts = new UnavailableAlerts();
+      const reportUnavailable = (
+        sessionID: string,
+        component: "reviewer" | "assessor",
+        reason: string,
+      ) => {
+        const alert = unavailableAlerts.fail(sessionID, component, reason);
+        if (alert) {
+          changed = true;
+          log("unavailable-alert", { session: sessionID, ...alert });
+        }
+      };
       const approvals = new ApprovalQueue(() => {
         changed = true;
       });
@@ -341,6 +358,12 @@ export default Plugin.define({
         });
       const registration = yield* ctx.rpc
         .register(Approvals, {
+          alerts: (input) =>
+            Effect.succeed(
+              unavailableAlerts.list(
+                (input as { sessionID: string }).sessionID,
+              ),
+            ),
           status: () =>
             Effect.succeed({
               healthy: startup.ok,
@@ -563,9 +586,13 @@ export default Plugin.define({
             intentId: request.session.intentId,
             goal: request.intent.goal,
           };
-          const operationalFailure = (reason: string): ReviewOutcome => {
+          const operationalFailure = (
+            reason: string,
+            passthrough = true,
+          ): ReviewOutcome => {
             if (
               active &&
+              passthrough &&
               !config.configError &&
               config.onReviewerFailure === "passthrough"
             ) {
@@ -574,8 +601,16 @@ export default Plugin.define({
               );
               return { kind: "unreviewed", request };
             }
-            log("review-deny", { ...evidence, reason });
-            return deny(unavailableReason(reason));
+            if (reason !== "reviewer cancelled") {
+              reportUnavailable(
+                call.sessionID,
+                "reviewer",
+                safeOperationalReason(reason),
+              );
+            }
+            const diagnostic = safeOperationalReason(reason);
+            log("review-deny", { ...evidence, reason: diagnostic });
+            return deny(unavailableReason(diagnostic));
           };
           if (!startup.ok) {
             return operationalFailure(startup.reason);
@@ -630,6 +665,19 @@ export default Plugin.define({
             decision = validateDecision(checked.value, request);
           } catch (error) {
             return operationalFailure(errorMessage(error));
+          }
+          unavailableAlerts.reviewed(call.sessionID, decision);
+          if (
+            decision.source === "unavailable" &&
+            (decision.decision === "deny" ||
+              config.approvalMode === "never-ask")
+          ) {
+            const diagnostic = unavailableDecisionAlert(decision.failureKind);
+            reportUnavailable(
+              call.sessionID,
+              diagnostic.component,
+              diagnostic.reason,
+            );
           }
           const fingerprint = fingerprintFor(request);
           if (
@@ -689,6 +737,22 @@ export default Plugin.define({
               ),
             );
             if (!response.ok || !["once", "session"].includes(response.value)) {
+              if (
+                decision.source === "unavailable" &&
+                response.ok &&
+                ["unavailable", "disconnected", "timeout"].includes(
+                  response.value,
+                )
+              ) {
+                const diagnostic = unavailableDecisionAlert(
+                  decision.failureKind,
+                );
+                reportUnavailable(
+                  call.sessionID,
+                  diagnostic.component,
+                  diagnostic.reason,
+                );
+              }
               if (response.ok && response.value === "deny") {
                 const noted = yield* attemptPromise((signal) =>
                   callAction(
@@ -770,6 +834,30 @@ export default Plugin.define({
               try {
                 reviewed = validateDecision(fresh.value, live.value);
               } catch {}
+            }
+            if (reconciled.ok && !fresh.ok)
+              return operationalFailure(fresh.reason, false);
+            if (reconciled.ok && fresh.ok && !reviewed)
+              return operationalFailure(
+                "reviewer emitted an invalid fresh decision",
+                false,
+              );
+            if (reconciled.ok && reviewed) {
+              unavailableAlerts.reviewed(call.sessionID, reviewed);
+              if (reviewed.source === "unavailable") {
+                const diagnostic = unavailableDecisionAlert(
+                  reviewed.failureKind,
+                );
+                reportUnavailable(
+                  call.sessionID,
+                  diagnostic.component,
+                  diagnostic.reason,
+                );
+                return {
+                  kind: "deny",
+                  message: reviewerDenialMessage(reviewed),
+                } satisfies ReviewOutcome;
+              }
             }
             if (reviewed)
               log("approval-fresh", {

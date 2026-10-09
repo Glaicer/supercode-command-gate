@@ -23,6 +23,12 @@ export const Approvals = Rpc.define({
     changed: { schema: { type: "object", additionalProperties: false } },
   },
   methods: {
+    alerts: {
+      input: object({ sessionID: { type: "string", minLength: 1 } }, [
+        "sessionID",
+      ]),
+      output: { type: "array", items: { type: "object" } },
+    },
     status: {
       input: object({}, []),
       output: { type: "object" },

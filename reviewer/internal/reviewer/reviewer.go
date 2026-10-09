@@ -21,36 +21,67 @@ var awsAccessKeyID = regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)
 var urlCredential = regexp.MustCompile(`(?i)(https?://[^/\s:@]+:)[^@\s]+(@)`)
 
 type auditRecord struct {
-	SchemaVersion      string          `json:"schemaVersion"`
-	AuditID            string          `json:"auditId"`
-	RecordedAt         string          `json:"recordedAt"`
-	Command            string          `json:"command"`
-	CWD                string          `json:"cwd"`
-	Decision           string          `json:"decision"`
-	Outcome            string          `json:"outcome"`
-	Source             string          `json:"source"`
-	Rule               *string         `json:"rule"`
-	RequestFingerprint string          `json:"requestFingerprint"`
-	Effects            []string        `json:"effects"`
-	Profile            string          `json:"profile"`
-	AssessorModel      string          `json:"assessorModel,omitempty"`
-	AssessorAttempts   int             `json:"assessorAttempts,omitempty"`
-	FailureKind        string          `json:"failureKind,omitempty"`
-	DurationMs         int64           `json:"durationMs"`
-	Assessment         *RiskAssessment `json:"assessment,omitempty"`
+	SchemaVersion      string             `json:"schemaVersion"`
+	AuditID            string             `json:"auditId"`
+	RecordedAt         string             `json:"recordedAt"`
+	Command            string             `json:"command"`
+	CWD                string             `json:"cwd"`
+	Decision           string             `json:"decision"`
+	Outcome            string             `json:"outcome"`
+	Source             string             `json:"source"`
+	OriginAuditID      string             `json:"originAuditId,omitempty"`
+	ReviewedCoverage   []ReviewedCoverage `json:"reviewedCoverage,omitempty"`
+	Rule               *string            `json:"rule"`
+	RequestFingerprint string             `json:"requestFingerprint"`
+	Effects            []string           `json:"effects"`
+	Profile            string             `json:"profile"`
+	AssessorConnection string             `json:"assessorConnection,omitempty"`
+	AssessorModel      string             `json:"assessorModel,omitempty"`
+	AssessorAttempts   int                `json:"assessorAttempts,omitempty"`
+	FailureKind        string             `json:"failureKind,omitempty"`
+	DurationMs         int64              `json:"durationMs"`
+	Assessment         *RiskAssessment    `json:"assessment,omitempty"`
 }
 
-// Check records audit and review logs without executing Request.Command.
+// Check evaluates Request.Command without executing it and optionally saves history.
 func Check(request Request, options Options) (result Decision, resultErr error) {
 	started := time.Now()
+	requestErr := validateRequest(request)
 	config, configErr := resolveReviewerConfig(request, options)
 	logOptions := options
 	if configErr == nil && logOptions.StateDir == "" {
 		logOptions.StateDir = config.Audit.Dir
 	}
-	log, err := newReviewLog(logOptions.StateDir)
-	if err != nil {
-		return Decision{}, err
+	defer func() {
+		if requestErr != nil {
+			return
+		}
+		stateDir, err := resolveStateDir(logOptions.StateDir)
+		if err == nil {
+			err = recordStats(stateDir, result, resultErr)
+		}
+		if err != nil {
+			result.StatsError = "usage statistics were not updated: " + err.Error()
+			if resultErr != nil {
+				resultErr = fmt.Errorf("%w; %s", resultErr, result.StatsError)
+			}
+		}
+	}()
+	var log *reviewLog
+	if configErr != nil || config.Audit.IsEnabled() {
+		stateDir, err := resolveStateDir(logOptions.StateDir)
+		if err != nil {
+			return Decision{}, err
+		}
+		unlock, err := historyLock(stateDir, false)
+		if err != nil {
+			return Decision{}, err
+		}
+		defer unlock()
+		log, err = newReviewLog(logOptions.StateDir)
+		if err != nil {
+			return Decision{}, err
+		}
 	}
 	defer func() {
 		log.record("verdict", map[string]any{
@@ -66,8 +97,9 @@ func Check(request Request, options Options) (result Decision, resultErr error) 
 		"command": request.Command, "cwd": request.CWD,
 		"sessionId": request.Session.ID, "intentId": request.Session.IntentID,
 	})
-	if err := validateRequest(request); err != nil {
-		return Decision{}, err
+
+	if requestErr != nil {
+		return Decision{}, requestErr
 	}
 	if configErr != nil {
 		return Decision{}, configErr
@@ -88,6 +120,11 @@ func Check(request Request, options Options) (result Decision, resultErr error) 
 		return Decision{}, err
 	}
 
+	launch, launchMiss := developmentLaunchFor(request, config)
+	if launchMiss == "" {
+		launch.Generation = readReviewedTrust(reviewedTrustPath(grantStateDir, launch.Project), launch.Project).Generation
+	}
+	trustCandidate := false
 	ir := ParseShell(request.Command)
 	log.record("parsed", map[string]any{
 		"shellIR":    ParseShell(redact(request.Command)),
@@ -140,13 +177,52 @@ func Check(request Request, options Options) (result Decision, resultErr error) 
 				decision.Source = SourceGrant
 				decision.GrantScope = grant.Scope
 				decision.GrantEligible = false
+			} else if entry, hit := findReviewedTrust(grantStateDir, launch); launchMiss == "" && hit {
+				current, reason := developmentLaunchFor(request, config)
+				current.Generation = readReviewedTrust(reviewedTrustPath(grantStateDir, current.Project), current.Project).Generation
+				if reason == "" && launchDigest(current) == launchDigest(launch) {
+					decision.Decision = DecisionAllow
+					decision.Source = SourceReviewedTrust
+					decision.Reason = "the Command Risk Assessor previously allowed this exact development launch in this project"
+					decision.OriginAuditID = entry.AuditID
+					log.record("reviewed-trust", map[string]any{"status": "hit", "originAuditId": entry.AuditID})
+				} else {
+					decision.Source = SourceUnavailable
+					decision.Reason = "development launch conditions changed while reading reviewed trust; retry the command"
+					log.record("reviewed-trust", map[string]any{"status": "miss", "reason": "launch changed while reading"})
+				}
+			} else if composition, covered := evaluateReviewedComposition(request, ir, policyOptions, config, grantStateDir); covered {
+				current, stillCovered := evaluateReviewedComposition(request, ir, policyOptions, config, grantStateDir)
+				if stillCovered && launchDigest(current.Coverage) == launchDigest(composition.Coverage) {
+					decision.Decision = DecisionAllow
+					decision.Source = SourceReviewedTrust
+					decision.Reason = "every possible shell element is covered by current policy or an individually reviewed development launch"
+					decision.ReviewedCoverage = composition.Coverage
+					for _, coverage := range composition.Coverage {
+						if coverage.Source == SourceReviewedTrust {
+							decision.OriginAuditID = coverage.OriginAuditID
+							break
+						}
+					}
+					log.record("reviewed-composition", map[string]any{"status": "hit", "coverage": composition.Coverage})
+				} else {
+					decision.Source = SourceUnavailable
+					decision.Reason = "composition launch conditions changed while reading reviewed trust; retry the command"
+					log.record("reviewed-composition", map[string]any{"status": "miss", "reason": "launch conditions changed while reading"})
+				}
 			} else {
+				log.record("reviewed-composition", map[string]any{"status": "miss", "reason": composition.MissReason, "commandIndex": composition.MissCommand, "coverage": composition.Coverage})
+				if launchMiss == "" {
+					launchMiss = "no matching current launch (new, changed, reset, expired or invalid record)"
+				}
+				log.record("reviewed-trust", map[string]any{"status": "miss", "reason": launchMiss})
 				log.record("assessor-required", map[string]any{"model": config.Assessor.Model})
 				assessment, local, trace, assessorErr := assessCommand(request, ir, policyOptions, config, log)
 				log.record("assessor-result", map[string]any{
 					"model": trace.Model, "attempts": trace.Attempts,
 					"assessment": redactedAssessment(assessment), "error": errorText(assessorErr),
 				})
+				decision.AssessorConnection = trace.Connection
 				decision.AssessorModel = trace.Model
 				decision.AssessorAttempts = trace.Attempts
 				if assessorErr != nil {
@@ -179,6 +255,9 @@ func Check(request Request, options Options) (result Decision, resultErr error) 
 					decision.Reason = mapped.Reason
 					decision.Source = SourceAssessor
 					decision.Assessment = assessment
+					current, reason := developmentLaunchFor(request, config)
+					current.Generation = readReviewedTrust(reviewedTrustPath(grantStateDir, current.Project), current.Project).Generation
+					trustCandidate = reason == "" && launchDigest(current) == launchDigest(launch) && decision.Decision == DecisionAllow && len(assessment.Risks) == 0 && len(assessment.Uncertainties) == 0 && !local.EvidenceChanged
 					decision.GrantEligible = config.Grants.SessionTrust && decision.Decision == DecisionAsk && grantFactsEligible(local) && !assessmentHasMaterialUncertainty(assessment, config.Policy)
 					if decision.Decision == DecisionAsk {
 						if err := reserveAsk(request, decision.RequestFingerprint, decision.GrantEligible, decision.Source, grantOptions, config); err != nil {
@@ -207,6 +286,19 @@ func Check(request Request, options Options) (result Decision, resultErr error) 
 		return Decision{}, err
 	}
 	decision.AuditID = auditID
+	if trustCandidate {
+		current, reason := developmentLaunchFor(request, config)
+		current.Generation = readReviewedTrust(reviewedTrustPath(grantStateDir, current.Project), current.Project).Generation
+		if reason == "" && launchDigest(current) == launchDigest(launch) {
+			saved, err := saveReviewedTrust(grantStateDir, launch, auditID)
+			if err != nil {
+				return Decision{}, err
+			}
+			if saved {
+				log.record("reviewed-trust", map[string]any{"status": "saved", "originAuditId": auditID})
+			}
+		}
+	}
 	return decision, nil
 }
 
@@ -368,6 +460,9 @@ func grantFactsEligible(local localAssessmentContext) bool {
 }
 
 func writeAudit(request Request, decision Decision, options Options, config Config) (string, error) {
+	if !config.Audit.IsEnabled() {
+		return randomID()
+	}
 	stateDir, err := resolveStateDir(options.StateDir)
 	if err != nil {
 		return "", err
@@ -392,10 +487,13 @@ func writeAudit(request Request, decision Decision, options Options, config Conf
 		Decision:           decision.Decision,
 		Outcome:            auditOutcome(decision.Source),
 		Source:             decision.Source,
+		OriginAuditID:      decision.OriginAuditID,
+		ReviewedCoverage:   decision.ReviewedCoverage,
 		Rule:               decision.Rule,
 		RequestFingerprint: decision.RequestFingerprint,
 		Effects:            effectsFor(decision),
 		Profile:            config.Policy.Profile,
+		AssessorConnection: decision.AssessorConnection,
 		AssessorModel:      decision.AssessorModel,
 		AssessorAttempts:   decision.AssessorAttempts,
 		FailureKind:        decision.FailureKind,
@@ -452,7 +550,7 @@ func Explain(auditID string, options Options) ([]byte, error) {
 	path := filepath.Join(stateDir, "audit", auditID+".json")
 	payload, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read audit record %s: %w", auditID, err)
+		return nil, fmt.Errorf("audit record %s was not saved or is absent: %w", auditID, err)
 	}
 	var record auditRecord
 	if err := json.Unmarshal(payload, &record); err != nil {
@@ -537,6 +635,8 @@ func auditOutcome(source string) string {
 		return AuditOutcomeModel
 	case SourceGrant:
 		return AuditOutcomeGrant
+	case SourceReviewedTrust:
+		return "reviewed-trust"
 	default:
 		return AuditOutcomeFailure
 	}

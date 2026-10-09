@@ -11,7 +11,7 @@ export function errorMessage(error: unknown): string {
 }
 
 export function blockedMessage(reason: string): string {
-  return `Auto Approve Permissions blocked this command. Reason: ${compactReason(reason)}. The command was not executed.`;
+  return `Command Gate blocked this command. Reason: ${compactReason(reason)}. The command was not executed.`;
 }
 
 export function reviewerDenialMessage(
@@ -21,7 +21,7 @@ export function reviewerDenialMessage(
     return redactText(blockedMessage(unavailableReason(decision.reason)));
   return redactText(
     [
-      `Auto Approve Permissions blocked this command. Reason: ${compactReason(decision.reason)}.`,
+      `Command Gate blocked this command. Reason: ${compactReason(decision.reason)}.`,
       ...(decision.rule ? [`Rule: ${decision.rule}`] : []),
       riskAssessmentText(decision.assessment),
       "The command was not executed.",
@@ -39,7 +39,7 @@ export function neverAskDenialMessage(
 ): string {
   return redactText(
     [
-      `Auto Approve Permissions blocked this command. Reason: ${compactReason(decision.reason)}.`,
+      `Command Gate blocked this command. Reason: ${compactReason(decision.reason)}.`,
       ...(decision.rule ? [`Rule: ${decision.rule}`] : []),
       riskAssessmentText(decision.assessment),
       NEVER_ASK_EXPLANATION,

@@ -74,7 +74,7 @@ test("invalid decisions are rejected, so a malformed reply can never authorize",
     ["reviewer emitted no reason", { reason: " " }],
     ["reviewer emitted invalid source", { source: "vibes" }],
     [
-      "allow decisions must come from auto-allow, grant, or assessor",
+      "allow decisions must come from auto-allow, grant, assessor, or reviewed-trust",
       { source: "unavailable" },
     ],
     [
@@ -154,4 +154,102 @@ test("doctor reports are validated against the preserved contract versions", () 
     assert.match(tooFast.reason, /greater than the reviewer deadline/);
   assert.equal(normalizeDoctorResult([], 5500).ok, false);
   assert.equal(normalizeDoctorResult(null, 5500).ok, false);
+});
+
+test("reviewed trust authorizes only an allow linked to its original audit", () => {
+  assert.equal(
+    validateDecision(
+      decision({
+        source: "reviewed-trust",
+        rule: null,
+        originAuditId: "a".repeat(32),
+      }),
+      request,
+    ).source,
+    "reviewed-trust",
+  );
+  for (const overrides of [
+    { originAuditId: undefined },
+    { originAuditId: "invalid" },
+    { decision: "ask" },
+  ]) {
+    assert.throws(
+      () =>
+        validateDecision(
+          decision({
+            source: "reviewed-trust",
+            rule: null,
+            originAuditId: "a".repeat(32),
+            ...overrides,
+          }),
+          request,
+        ),
+      /reviewed-trust requires allow/,
+    );
+  }
+});
+
+test("reviewed composition provenance requires complete valid node coverage", () => {
+  const make = (reviewedCoverage: unknown) =>
+    decision({
+      source: "reviewed-trust",
+      rule: null,
+      originAuditId: "a".repeat(32),
+      reviewedCoverage,
+    });
+  assert.equal(
+    validateDecision(
+      make([
+        {
+          commandIndex: 0,
+          source: "reviewed-trust",
+          originAuditId: "a".repeat(32),
+        },
+        { commandIndex: 1, source: "auto-allow", rule: "AA008" },
+      ]),
+      request,
+    ).source,
+    "reviewed-trust",
+  );
+  for (const coverage of [
+    [],
+    null,
+    [
+      {
+        commandIndex: -1,
+        source: "reviewed-trust",
+        originAuditId: "a".repeat(32),
+      },
+    ],
+    [{ commandIndex: 0, source: "grant", originAuditId: "a".repeat(32) }],
+    [{ commandIndex: 0, source: "auto-allow", rule: "AA008" }],
+    [
+      {
+        commandIndex: 0,
+        source: "reviewed-trust",
+        originAuditId: "b".repeat(32),
+      },
+    ],
+    [
+      {
+        commandIndex: 0,
+        source: "reviewed-trust",
+        originAuditId: "a".repeat(32),
+      },
+      { commandIndex: 0, source: "auto-allow", rule: "AA008" },
+    ],
+    [
+      {
+        commandIndex: 0,
+        source: "reviewed-trust",
+        originAuditId: "a".repeat(32),
+      },
+      { commandIndex: 1, source: "auto-allow" },
+    ],
+  ]) {
+    assert.throws(
+      () => validateDecision(make(coverage), request),
+      /reviewed composition provenance/,
+    );
+  }
 });

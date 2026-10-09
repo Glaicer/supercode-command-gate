@@ -34,7 +34,7 @@ test("every model-facing denial keeps the same envelope", () => {
   ]) {
     assert.match(
       blockedMessage(reason),
-      /^Auto Approve Permissions blocked this command\. Reason: .+\. The command was not executed\.$/,
+      /^Command Gate blocked this command\. Reason: .+\. The command was not executed\.$/,
     );
   }
 });

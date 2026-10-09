@@ -9,17 +9,21 @@ import (
 )
 
 type policyEvaluator struct {
-	options       Options
-	env           map[string]string
-	originalCWD   string
-	workspaceRoot string
-	tempRoot      string
-	protected     []string
-	additionUsed  bool
+	options             Options
+	env                 map[string]string
+	originalCWD         string
+	workspaceRoot       string
+	tempRoot            string
+	protected           []string
+	additionUsed        bool
+	acceptPolicyCommand func(IRExecution, policyState) bool
+	reviewedCommand     func(IRExecution, policyState, bool, bool) bool
+	pipelineSafe        func(IRExecution, policyState) bool
 }
 
 type policyState struct {
-	cwd string
+	cwd            string
+	contextChanged bool
 }
 
 func evaluateAutoAllow(request Request, ir ShellIR, options Options) (rule, reason string, ok bool) {
@@ -72,12 +76,25 @@ func (e *policyEvaluator) evaluateExecution(ir ShellIR, execution IRExecution, s
 		if !redirectionsSafe {
 			return false, state
 		}
-		if pipelineInput || inputProvided {
-			return e.commandSafe(command, state, true)
+		safe, next := e.commandSafe(command, state, pipelineInput || inputProvided)
+		if safe {
+			if e.acceptPolicyCommand != nil {
+				if !e.acceptPolicyCommand(execution, state) {
+					return false, state
+				}
+				next.contextChanged = state.contextChanged || command.Name == "cd"
+			}
+			return true, next
 		}
-		return e.commandSafe(command, state, false)
+		if e.reviewedCommand != nil {
+			return e.reviewedCommand(execution, state, pipelineInput, inputProvided), state
+		}
+		return false, state
 	case "pipeline":
 		if len(execution.Children) == 0 {
+			return false, state
+		}
+		if e.pipelineSafe != nil && !e.pipelineSafe(execution, state) {
 			return false, state
 		}
 		for index, child := range execution.Children {
@@ -96,7 +113,14 @@ func (e *policyEvaluator) evaluateExecution(ir ShellIR, execution IRExecution, s
 		if !leftSafe {
 			return false, state
 		}
-		return e.evaluateExecution(ir, execution.Children[1], next, false)
+		if e.reviewedCommand != nil && (next.cwd != state.cwd || next.contextChanged != state.contextChanged) {
+			return false, state
+		}
+		safe, last := e.evaluateExecution(ir, execution.Children[1], next, false)
+		if e.reviewedCommand != nil && (last.cwd != state.cwd || last.contextChanged != state.contextChanged) {
+			return false, state
+		}
+		return safe, last
 	default:
 		return false, state
 	}

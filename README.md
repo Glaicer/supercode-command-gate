@@ -2,9 +2,33 @@
 
 Native Bash review for OpenCode **2.0.22**, using the separate `aar` Command Reviewer. The **1.0.0** breaking release line is V2-only; the historical Gate **0.1.0** remains V1-only. No dual-API factory or runtime emulation is shipped. Release acceptance remains incomplete until the genuine human TUI smoke passes.
 
+## Security limitations
+
+**AAR is a safeguard against agent mistakes, not a security boundary against a deliberately harmful agent.** It reviews command safety, but does not verify the safety of executable files, package scripts or their dependencies. It may inspect some script sources as evidence; this is not a comprehensive security audit, and an `allow` decision does not guarantee that the executed code is safe.
+
+An agent deliberately attempting destructive actions is likely to succeed, for example by placing harmful code in a file and running it through an otherwise ordinary command. AAR does not sandbox execution or restrict the launched process's filesystem and network access. Execution isolation, such as bubblewrap (`bwrap`), is a separate protection layer and is outside this project's scope.
+
+Successful Assessor Allow for a supported development launch may be reused across sessions in the **same canonical working package** (`reviewed-trust`), separately from human grants. This is an optimization of the safeguard above. Ordinary source and test edits intentionally preserve this trust; it does not prove executable code safe. Only assessments with no risks or uncertainties are recorded. Human approval, Ask, Deny, unavailable Assessor and passthrough never populate it.
+
+The first slice supports `npm run <script>`, `npm test`, `pnpm [run] <script>`, `pnpm exec <tool> …`, and explicit `./node_modules/.bin/<tool> …`: TypeScript `tsc --noEmit`, ESLint without fixes, Prettier `--check`, `vitest run`, and `playwright test`. Static single-command package script chains and applicable pre/post scripts are disclosed to the Assessor. Script names never produce an initial Allow. Only supported static arguments are eligible; install/publish/dev commands, shell composition, workspace selectors/inherited packages, alternate config flags, executable or indirect tool configurations, custom Node startup, manager hook files and unknown actions take the ordinary review path. Workspace roots different from the working package are currently unsupported. The compositions below reuse only individually reviewed records; a whole-program Assessor Allow never creates records for its component commands.
+
+Static `;`, `&&` and `||` compositions can reuse individual launch records alongside commands covered by deterministic policy, for example `pnpm typecheck && pnpm lint` or `pnpm typecheck && git status --short`. Both conditional branches must be covered. Supported development producers can pipe output through policy-checked `head`/`tail`; one literal `2>&1` can merge stderr into stdout without changing the producer's argv, environment, cwd or stdin. Output truncation may close the pipe early; this is output handling, not a new guarantee about executable behavior. Pipe/file input to a development launch, other descriptor changes or file output, unknown consumers, mutating policy actions and operator additions take the ordinary whole-program Assessor path. Policy-only pipelines retain their policy semantics.
+
+Parent `cd` changes cwd and potentially `PWD`/`OLDPWD`, so later launch reuse conservatively falls back even when a path appears unchanged. Branch-dependent cwd also falls back. A `cd` producer inside a policy-covered pipeline cannot change the parent's launch context. Coverage is checked through the existing ShellIR evaluator, preserving quoted separators and exact individual command bytes; commands are never split by string separators. A composition verdict includes `reviewedCoverage` node indexes, policy rules and original audit IDs without copying command literals into provenance. Resetting or invalidating any required record restores whole-program review; composed Allow never creates human grants.
+
+Every lookup checks current Hard Deny and whole-program policy before reuse, and Gate still applies native permissions. Exact command bytes, canonical cwd, scripts/hooks and manifest, lockfiles and installed manager metadata, local selected executable bytes and resolved paths, Node/package-manager executable bytes, root configuration/ignore files and their existence, manager rc inputs, and Reviewer policy/semantics participate in invalidation. The Gate includes PATH and supported runtime override indicators as secret-safe evidence; a SHA-256 digest of the complete invocation environment catches changes to undisclosed settings without forwarding their values. Requests lacking that digest or PATH/HOME are reviewed normally. Config references/imports, executable configs, parent package/tool configs and dynamic manager overrides remain unsupported until their resolution is implemented.
+
+Trust lives under the Reviewer state directory in `reviewed-trust/`, as atomic versioned files with per-project locking, at most 256 entries per project, and a 30-day lifetime. Hits carry `originAuditId`; audit/review events distinguish hits, new saves and misses (including changed/reset/expired/invalid inputs). Missing, corrupt or unknown-version records never authorize. To reset the current project's persistent trust without changing human grants, use the same Reviewer state/config environment as Gate:
+
+```sh
+aar trust-reset --project /absolute/path/to/project
+```
+
+Reset is scoped to that canonical working directory and prevents a review already in flight from restoring the previous generation. Different worktrees and projects never share trust.
+
 ## Approval
 
-**Approval mode.** The server option `approvalMode` defaults to **`never-ask`**: every Reviewer `ask` is deterministically denied as a policy refusal — no pending request is created, no adapter is awaited and no dialog opens, with or without a connected TUI. The model-visible tool error carries the original Reviewer reason, the readable risks/uncertainties and the fixed explanation "Human approval is required by Reviewer policy, but prompts are disabled. The command was not executed." Ask-to-Deny is a policy refusal, never an operational failure: neither `onReviewerFailure: "passthrough"` nor a connected approval client can bypass it, and no severity threshold, implicit approval or automatic grant exists. The human approval flow described below is opt-in via the explicit `"approvalMode": "interactive"` server option — the mode for users who want **Allow once** or **Trust exact for session**:
+**Approval mode.** The server option `approvalMode` defaults to **`never-ask`**: every policy Reviewer `ask` is deterministically denied as a policy refusal — no pending request is created, no adapter is awaited and no approval dialog opens, with or without a connected TUI. The model-visible tool error carries the original Reviewer reason, the readable risks/uncertainties and the fixed explanation "Human approval is required by Reviewer policy, but prompts are disabled. The command was not executed." Policy Ask-to-Deny is a policy refusal, never an operational failure: neither `onReviewerFailure: "passthrough"` nor a connected approval client can bypass it, and no severity threshold, implicit approval or automatic grant exists. The human approval flow described below is opt-in via the explicit `"approvalMode": "interactive"` server option — the mode for users who want **Allow once** or **Trust exact for session**:
 
 ```jsonc
 {
@@ -46,6 +70,164 @@ aar doctor
 
 `release.sh` emits static binaries for linux-amd64, linux-arm64, darwin-amd64 and darwin-arm64 plus `SHA256SUMS`. For a single local binary, `go build -o aar ./cmd/aar` is enough. The release binary embeds the pinned Bash parser and has no runtime download or provider SDK dependency. The Reviewer parses and assesses commands, returns a Decision, and writes a redacted audit record; it never executes the command under review. Reviewer configuration is documented below.
 
+## New Reviewer and Gate features
+
+### Persistent reviewed command trust — ticket 13
+
+A successful Assessor Allow for a supported development launch can be reused
+across processes and sessions in the same canonical project. Supported launches
+include exact npm/pnpm scripts and supported local typecheck, lint, format-check
+and test executables. AAR resolves available script bodies, hooks and executable
+inputs before the initial assessment; a script name alone is never approval.
+
+Reuse requires the same command and arguments, invocation environment, package
+scripts, dependency/lockfile inputs, supported configuration, selected executable
+and policy versions. Ordinary source and test edits retain this trust. Changed
+launch inputs, another project, an unsupported launch, a damaged record or an
+expired entry returns to whole-command review. Entries are separate from human
+grants, bounded to 256 per project and usable for 30 days. Every hit still passes
+Hard Deny and native permissions; this is not executable isolation.
+
+Reset reviewed trust explicitly when you want a fresh assessment:
+
+```sh
+aar trust-reset --project /absolute/path/to/project
+```
+
+Reset does not remove human grants or history. A reused Decision has source
+`reviewed-trust` and an `originAuditId` referring to the original assessment;
+with history disabled, that ID remains provenance but need not have a saved record.
+
+### Safe composition of reviewed launches — ticket 14
+
+After individual Allow for `pnpm typecheck` and `pnpm lint`, a covered
+`pnpm typecheck && pnpm lint` can reuse both records without another model call.
+Static `;`, `&&` and `||` chains check every possible branch, including the
+right-hand side of `||`. A chain may mix reviewed launches with deterministic
+policy commands, such as `pnpm typecheck && git status --short`.
+
+Supported development output can pass through policy-safe `head`/`tail`, for
+example `pnpm test | tail -n 20`, including one supported `2>&1` stderr merge.
+Changed stdin, argv, environment, parent cwd, unsupported redirections or output
+consumers prevent reuse. Unknown elements return the entire original program to
+one whole-command assessment; AAR does not audit nodes independently or extract
+individual trust from a previous composite Allow. Hard Deny anywhere still wins.
+Audit provenance lists the covered command indexes and their policy rules or
+original assessment IDs. Statistics count the final composed verdict once.
+
+### Optional history and cleanup — ticket 15
+
+Set `[audit] enabled = false` to stop saving audit JSON and SQLite review history.
+Review decisions, human grants, reviewed trust and aggregate statistics continue
+to work. Existing history is retained until explicitly cleaned; `auditId` does
+not imply that `aar explain` can retrieve a record.
+
+Run `aar cleanup` to clear saved audit and review trace in the effective state
+directory while preserving grants, deny notes, reviewed trust, statistics and
+configuration. Busy stores report an error so cleanup can be retried after active
+checks finish. See [grants and audit settings](#grants-and-audit-settings).
+
+### Aggregate usage statistics — ticket 16
+
+Run `aar stats` to see Processed, policy approvals, fresh/reused LLM approvals,
+human approvals, Denied, Ask, Errors and the accumulation start. One completed
+check counts once; internal model retries and nodes of a composite command do
+not multiply the count. Repeated independent checks count again.
+
+These are Reviewer outcomes, not native executions: an Ask remains Ask even when
+Gate's never-ask mode turns it into a refusal. Counters survive process changes,
+disabled history and `aar cleanup`, and store no command text or project paths.
+There is no historical backfill. Corrupt state is diagnosed; a counter-write
+failure preserves the original review verdict. See
+[the statistics contract](#grants-and-audit-settings).
+
+### ChatGPT subscription through OpenCode — ticket 17
+
+Sign in with the OpenCode harness that runs Gate:
+
+```sh
+opencode auth login openai --method chatgpt-browser
+```
+
+Then configure AAR independently:
+
+```toml
+[assessor]
+authMode = "opencode"
+model = "gpt-6-luna"
+totalTimeoutMs = 20000
+options = { reasoning = { effort = "none" } }
+```
+
+OpenCode v2.0.24 migrates legacy `auth.json` credentials into its database and
+updates that store. AAR therefore uses the public `opencode auth export` CLI,
+selects the active OpenAI ChatGPT OAuth connection, and reloads it on every
+attempt. There is no `authJsonPath` in this mode. OpenCode owns login and refresh;
+AAR never changes its credentials or performs token refresh. If the owner token
+has expired, refresh or sign in through OpenCode before retrying.
+
+The CLI defaults to `opencode` on PATH; set `OPENCODE_BIN` to the harness binary
+when needed. Gate forwards the host's OpenCode config and XDG data/cache paths
+so the CLI uses the same credential store. `aar doctor` checks owner credentials
+through the CLI without a model call or browser login. The CLI uses OpenCode's
+normal server connection and may start its managed service when absent.
+
+Assessments use a fixed ChatGPT subscription endpoint, with no tools, conversation
+history or implicit paid API fallback. An explicitly configured API-key fallback
+is supported with `authMode = "opencode"`; it uses its own endpoint and key.
+Account entitlement and model availability still apply. Clear inherited primary
+`baseUrl`, `apiKeyEnv` and `authJsonPath` when switching from another mode. The previous explicit
+`authMode = "codex"` file reader remains available for compatibility. See
+[subscription setup and limitations](reviewer/README.md#chatgpt-subscription-authentication).
+
+### Session-scoped operational alerts — ticket 19
+
+When an operational failure blocks a command, the connected TUI shows a
+dismissible **Command Gate unavailable** alert for that session and location.
+Known Assessor failure facts identify the Assessor; missing facts produce a
+generic diagnostic. Policy Deny, disabled approval prompts and human cancellation
+do not become outage alerts.
+
+Closing the alert does not approve or execute anything. Repeated failures share
+one alert until that component has actually recovered; policy Allow alone cannot
+prove Assessor recovery. Late RPC replies cannot show another session's alert.
+Without a TUI, the command still receives its operational tool error. See
+[failures and cancellation](#failures-and-cancellation).
+
+### Independent provider fallback — ticket 20
+
+Configure ordered API-key connections with their own endpoint, model, credential
+variable and options, so an unavailable primary provider can fall back to another:
+
+```toml
+[assessor]
+model = "primary-model"
+baseUrl = "https://provider-a.example/v1"
+apiKeyEnv = "PROVIDER_A_KEY"
+totalTimeoutMs = 5000
+
+[[assessor.fallbacks]]
+model = "fallback-model"
+baseUrl = "https://provider-b.example/v1"
+apiKeyEnv = "PROVIDER_B_KEY"
+```
+
+Each connection receives only its own credential. Missing credentials, transport
+failures, invalid assessments or insufficient context capacity can advance to the
+next connection within one shared deadline. A validated RiskAssessment ends the
+chain even when its verdict is Ask or Deny; fallback does not search for a more
+permissive answer. Hard Deny and approval policy stay authoritative.
+
+Fallback endpoint/key/options do not inherit primary values. A project fallback
+array replaces the global array; `fallbacks = []` clears it. Legacy
+`fallbackModels` changes only the model on the primary connection and cannot be
+combined with nonempty `fallbacks`. See the
+[complete fallback settings](reviewer/README.md#independent-assessor-providers).
+
+Ticket 18's transcript approval label remains blocked: the public OpenCode
+v2.0.24 UI has no call-bound slot before a native command block. Operational
+alerts are a separate feature and do not substitute for that label.
+
 ## Reviewer configuration
 
 The Reviewer uses the first existing file from `$AAR_CONFIG`,
@@ -84,7 +266,8 @@ sessionTrust = true # Offer Trust exact for session only when the command is eli
 maxAgeSeconds = 86400 # Clean up grant records older than 24 hours.
 reservationTTLSeconds = 600 # Pending approval reservation expires after 10 minutes.
 
-[audit] # Persistent audit and approval state.
+[audit] # History and state directory.
+enabled = true # Set false to skip audit JSON and SQLite review history.
 dir = "/path/to/aar-state" # State directory; omit to use the environment/default path.
 ```
 
@@ -96,18 +279,22 @@ not test a live model response.
 
 ### Assessor settings
 
-| Key in `[assessor]` | Default  | Meaning                                                                                                            |
-| ------------------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
-| `model`             | Unset    | Primary model identifier sent to the endpoint.                                                                     |
-| `fallbackModels`    | `[]`     | Backup model identifiers for subsequent attempts.                                                                  |
-| `baseUrl`           | Unset    | OpenAI-compatible API URL; `/chat/completions` is appended unless already present. Remote endpoints require HTTPS. |
-| `apiKeyEnv`         | Unset    | Environment variable name containing the API credential.                                                           |
-| `totalTimeoutMs`    | `5000`   | Total assessment time budget in milliseconds, including fallback attempts.                                         |
-| `onUnavailable`     | `"deny"` | `"deny"` or `"ask"` when assessment cannot be completed, including invalid model responses.                        |
+| Key in `[assessor]` | Default     | Meaning                                                                                                                           |
+| ------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `authMode`          | `"api-key"` | `"opencode"` uses the active OpenCode ChatGPT connection; `"codex"` reads an explicit Codex file.                                 |
+| `authJsonPath`      | Unset       | Absolute private Codex credential file; only for `authMode = "codex"`.                                                            |
+| `fallbacks`         | `[]`        | Ordered independent API-key provider connections; also supported after an OpenCode subscription primary; Codex mode rejects them. |
+| `model`             | Unset       | Primary model identifier sent to the endpoint.                                                                                    |
+| `fallbackModels`    | `[]`        | Backup model identifiers for subsequent attempts.                                                                                 |
+| `baseUrl`           | Unset       | OpenAI-compatible API URL; `/chat/completions` is appended unless already present. Remote endpoints require HTTPS.                |
+| `apiKeyEnv`         | Unset       | Environment variable name containing the API credential.                                                                          |
+| `totalTimeoutMs`    | `5000`      | Total assessment time budget in milliseconds, including fallback attempts.                                                        |
+| `onUnavailable`     | `"deny"`    | `"deny"` or `"ask"` when assessment cannot be completed, including invalid model responses.                                       |
 
 Without an assessor model, deterministic review remains available. Commands
 requiring model assessment use the unavailable action. When configuring a
-model, provide its endpoint and credential environment variable.
+API-key model, provide its endpoint and credential environment variable.
+Subscription setup uses the separate auth modes described above.
 
 `[assessor.options]` passes additional fields to the API request, such as
 `temperature`; support depends on the endpoint. AAR supplies `model` and
@@ -181,6 +368,7 @@ argv = ["my-tool", "--version"] # Complete argument vector; no wildcard or prefi
 | `grants.sessionTrust`          | `true`    | Offer session trust for an exact command when its evidence is eligible. |
 | `grants.maxAgeSeconds`         | `86400`   | Age threshold for cleaning up grant records.                            |
 | `grants.reservationTTLSeconds` | `600`     | Lifetime of a pending approval reservation.                             |
+| `audit.enabled`                | `true`    | Save audit JSON and SQLite review history; false leaves working state intact. |
 | `audit.dir`                    | Automatic | State directory containing audit and approval records.                  |
 
 When `audit.dir` is unset, the state directory is selected from `$AAR_STATE_DIR`,
@@ -198,8 +386,56 @@ Audit records classify outcomes as `deterministic`, `model`, `grant`, or
 `failure`, and include the selected profile, assessor attempt metadata, and
 redacted RiskAssessment evidence when one exists.
 
-Every `aar check` also writes events to `<state-dir>/logs/reviews.sqlite`.
-Logging is always enabled and uses the same state directory as audit and grants;
+With `[audit] enabled = false`, checks keep the same Decision and permissions
+without creating or opening audit/log files, including retries and failures.
+Existing history remains. `auditId` remains a correlation ID and does not promise
+a saved record; `aar explain` reports that an unsaved or cleaned record is absent.
+Grants and trust remain available. `aar doctor` reports effective `loggingEnabled`.
+
+Clear saved history explicitly from the project whose `.aar.toml` should apply:
+
+```sh
+aar cleanup
+```
+
+Cleanup uses the same effective configuration and state directory as checks. It
+removes audit JSON and clears `review_events`, including SQLite WAL history,
+while retaining the database file, grants, deny notes, trust, aggregate counters,
+and configuration. It works with logging disabled or absent history and is safe
+to repeat. It rejects symlink history paths and reports active checks or SQLite
+writers/readers as busy; retry after they finish. Future enabled checks can
+record new history. If cleanup fails, its error is explicit and some trace data
+may already have been cleared.
+
+Inspect aggregate Reviewer outcomes using the same config/state environment:
+
+```sh
+aar stats
+```
+
+The summary shows Processed, Approved by policy, Approved by LLM (fresh/reused),
+Approved by human, Denied, Ask, Errors, and the start of accumulation. Processed
+counts each accepted, completed check once, including errors without a Decision;
+repeated checks count again, while internal Assessor retries do not. Policy,
+fresh/reused LLM, human approval, Deny, Ask, and Errors are mutually exclusive.
+Composed policy plus reviewed trust is one reused LLM approval. Malformed stdin
+or an invalid request is excluded; other CLI commands do not increment counters.
+Reviewer Ask remains Ask if Gate's never-ask mode denies it. These are Reviewer
+outcomes, not executed commands, Gate outcomes, or native permission decisions.
+
+`stats.json` stores only versioned counters and the period start, independently
+of history, with atomic replacement and a process lock. Logging-disabled checks
+still update it, and cleanup retains it. Accumulation begins with the first
+recorded check after this feature is installed; there is no historical backfill
+or recount on restart. Empty state reports zero and no started period. Corrupt
+or unknown-version state produces an error rather than invented totals.
+A counter write failure preserves the original Allow/Ask/Deny and reports a
+warning on check's stderr; a failing check retains its error and adds the
+statistics diagnostic. Such checks are missing from the recorded totals until
+the storage problem is fixed; they are never replayed automatically.
+
+When `audit.enabled` is true, `aar check` also writes events to
+`<state-dir>/logs/reviews.sqlite`. Logging uses the same state directory as audit and grants;
 by default, the database is `~/.local/state/aar/logs/reviews.sqlite`.
 The `review_events` table stores `id` (event order), `review_id` (groups one check),
 `recorded_at` (UTC), `event`, and `detail` (masked event fields as JSON).
@@ -379,7 +615,22 @@ Reviewer reservation expiry still applies: a response arriving before the human 
 
 The default `onReviewerFailure: "deny"` keeps interception loaded when doctor is unhealthy or the binary is missing/incompatible. Invalid options always deny. Explicit `"passthrough"` permits operational Reviewer failures only, labelled **UNREVIEWED** in server diagnostics and a TUI warning fetched through public status RPC. Reviewer deny/ask (including never-ask Ask-to-Deny), stale context, failed approval/grant, native deny, unsupported Bash/background invocation and invalid configuration never become passthrough.
 
-Gate-owned Reviewer and RTK operations are deadline-bound. On cancellation/deadline, POSIX subprocess groups receive SIGKILL (including descendants); the Effect finalizer joins subprocess close before releasing review state. Native command execution and its supervision remain entirely with OpenCode. Unload interrupts the wrapped native Effect, including pre-spawn permission waits; any already-running native process is cancelled by host supervision, never by a Gate spawner. Pending human waits remove timers/abort listeners on every terminal response, and plugin unload closes them and signals outstanding reviews. Captured old tool wrappers refuse after unload instead of executing without their removed shell hook. Restart/reload still resets persisted trust before first review.
+Gate-owned Reviewer and RTK operations are deadline-bound. On cancellation/deadline, POSIX subprocess groups receive SIGKILL (including descendants); the Effect finalizer joins subprocess close before releasing review state. Native command execution and its supervision remain entirely with OpenCode. Unload interrupts the wrapped native Effect, including pre-spawn permission waits; any already-running native process is cancelled by host supervision, never by a Gate spawner. Pending human waits remove timers/abort listeners on every terminal response, and plugin unload closes them and signals outstanding reviews. Captured old tool wrappers refuse after unload instead of executing without their removed shell hook. Restart/reload still resets persisted human session grants before first review.
+
+A blocked operational failure also opens a dismissible **Command Gate unavailable**
+alert in the connected TUI for the owning session/location. It distinguishes a
+Reviewer/transport failure from **Command Risk Assessor unavailable** and shows
+only safe diagnostic labels. The command was not executed; closing this alert
+records no approval, creates no grant and leaves the policy unchanged. Ordinary
+policy refusals and human cancellation do not open this alert. Explicit
+passthrough execution keeps its existing UNREVIEWED diagnostic.
+
+Repeated failures of the same component in the same session share one outage
+alert. A validated Reviewer reply confirms Reviewer recovery. Only a validated
+Assessor result confirms Assessor recovery; auto-allow or a grant does not.
+After that recovery a new outage can open a new alert. The existing RPC heartbeat
+and notifications carry this state; no extra model calls or health polling are
+added. Without a TUI the operational tool error still blocks immediately.
 
 **Accepted fail-open gap:** an absent, disabled or failed-to-load plugin cannot intercept native commands. Inventory alone does not prove protection; inspect doctor/operational diagnostics. This is distinct from a loaded-but-unhealthy Gate, which denies by default.
 
