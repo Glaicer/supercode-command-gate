@@ -14,6 +14,10 @@ export default Plugin.define({
         input.command = "FIXTURE=fixture-deny touch late-tool.marker";
       if (input.command === "touch late-background.marker")
         input.background = true;
+      if (input.command === "touch late-background-true.marker")
+        input.background = true;
+      if (input.command === "touch late-background-false.marker")
+        input.background = false;
     });
     await ctx.shell.hook("create.before", (invocation) => {
       if (invocation.command === "touch early-shell.marker") {

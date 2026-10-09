@@ -242,7 +242,7 @@ test("default never-ask maps Reviewer ask to an immediate policy denial without 
   assert.equal(denial.source, "assessor");
 });
 
-test("background and non-Bash invocations refuse explicitly", () => {
+test("default-mode background and non-Bash invocations refuse explicitly", () => {
   const background = find(evidence.main, "background-reject");
   assert.equal(background.marker, false);
   assert.match(background.toolResult, /background execution is outside/i);
@@ -258,6 +258,66 @@ test("background and non-Bash invocations refuse explicitly", () => {
   assert.equal(sh.marker, false);
   assert.match(sh.toolResult, /unsupported shell/i);
   assert.match(sh.toolResult, /command was not executed/i);
+});
+
+test("allowBackground reviews background invocations and runs them in the host background", () => {
+  const boot = evidence.background;
+  assert.equal(
+    boot.inventoryOK,
+    true,
+    "the allowBackground boot activates the Gate",
+  );
+
+  const allow = find(boot, "background-allow");
+  assert.equal(
+    allow.marker,
+    true,
+    "the reviewed background command really executes",
+  );
+  assert.equal(allow.finished, true);
+  assert.match(allow.toolResult, /Command moved to the background/);
+  const allowReview = reviewOf(allow, "review-allow");
+  assert.equal(
+    allowReview.background,
+    true,
+    "the review-allow event logs the background fact",
+  );
+  const allowAudit = boot.auditRecords.find(
+    (record) => record.command === "touch background-allow.marker",
+  );
+  assert.ok(allowAudit, "the background request reached the reviewer");
+  assert.equal(
+    allowAudit.background,
+    true,
+    "the review request to aar carries background: true",
+  );
+
+  const deny = find(boot, "background-deny");
+  assert.equal(deny.marker, false);
+  assert.match(deny.toolResult, /command was not executed/i);
+  assert.equal(deny.finished, true);
+  const denyReview = reviewOf(deny, "review-deny");
+  assert.equal(denyReview.background, true);
+  assert.equal(denyReview.source, "assessor");
+
+  const foreground = find(boot, "foreground-unchanged");
+  assert.equal(foreground.marker, true);
+  assert.equal(foreground.finished, true);
+  const foregroundReview = reviewOf(foreground, "review-allow");
+  assert.equal(
+    "background" in foregroundReview,
+    false,
+    "foreground events stay unchanged",
+  );
+  const foregroundAudit = boot.auditRecords.find(
+    (record) => record.command === "touch foreground-unchanged.marker",
+  );
+  assert.ok(foregroundAudit);
+  assert.equal(
+    "background" in foregroundAudit,
+    false,
+    "foreground requests omit the background field entirely",
+  );
 });
 
 test("child sessions pass the same Gate while non-shell tools and human shell stay untouched", () => {

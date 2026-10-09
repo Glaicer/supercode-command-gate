@@ -180,7 +180,7 @@ export async function runSeam(options = {}) {
                   arguments: JSON.stringify({
                     ...scenario.call.arguments,
                     ...(scenario.commands
-                      ? { command: scenario.commands[toolResults.length] }
+                      ? commandArguments(scenario.commands[toolResults.length])
                       : {}),
                   }),
                 },
@@ -290,6 +290,37 @@ export async function runSeam(options = {}) {
         modelRequests,
         cases,
         integrity: true,
+      });
+      cases = [
+        {
+          name: "late-background-true",
+          call: {
+            tool: "shell",
+            arguments: { command: "touch late-background-true.marker" },
+          },
+          marker: "late-background-true.marker",
+        },
+        {
+          name: "late-background-false",
+          call: {
+            tool: "shell",
+            arguments: {
+              command: "touch late-background-false.marker",
+              background: true,
+            },
+          },
+          marker: "late-background-false.marker",
+        },
+      ];
+      evidence.integrityBackground = await boot({
+        name: "integrity-background",
+        root: `${root}/integrity-background`,
+        baseURL,
+        aar,
+        modelRequests,
+        cases,
+        integrity: true,
+        pluginOptions: { allowBackground: true },
       });
       cases = [
         {
@@ -594,6 +625,29 @@ exec '${aar}' "$@"
           pluginOptions: { timeoutMs: 1500, ...pluginOptions },
         });
       }
+      cases = [
+        {
+          name: "background-invalid-option",
+          call: {
+            tool: "shell",
+            arguments: {
+              command: "touch background-invalid.marker",
+              background: true,
+            },
+          },
+          marker: "background-invalid.marker",
+          expectMarker: false,
+        },
+      ];
+      evidence.backgroundInvalid = await boot({
+        name: "background-invalid",
+        root: `${root}/background-invalid`,
+        baseURL,
+        aar,
+        modelRequests,
+        cases,
+        pluginOptions: { allowBackground: "yes" },
+      });
       evidence.startupFailures = [];
       for (const mode of ["deny", "passthrough"]) {
         for (const failure of ["missing", "unhealthy", "contract", "config"]) {
@@ -843,6 +897,142 @@ exec '${aar}' "$@"
       console.log(`Never-ask evidence: ${root}/results.json`);
       return evidence;
     }
+    if (options.backgroundGrants) {
+      const sequence = (name, first, second) => ({
+        name,
+        call: { tool: "shell", arguments: { command: `bash ${name}.sh` } },
+        commands: [
+          { command: `bash ${name}.sh`, background: first },
+          { command: `bash ${name}.sh`, background: second },
+        ],
+        script: `FIXTURE=fixture-ask printf 'once\n' >> ${name}.marker\n`,
+        scriptFile: `${name}.sh`,
+        marker: `${name}.marker`,
+        repeat: 2,
+      });
+      cases = [
+        {
+          name: "bg-ask-once",
+          call: {
+            tool: "shell",
+            arguments: { command: "bash bg-ask-once.sh", background: true },
+          },
+          script: "FIXTURE=fixture-ask printf 'once\n' >> bg-ask-once.marker\n",
+          scriptFile: "bg-ask-once.sh",
+          marker: "bg-ask-once.marker",
+          approval: "once",
+        },
+        { ...sequence("bg-trust-bg", true, true), approval: "session" },
+        {
+          ...sequence("bg-trust-fg-asks", true, false),
+          approval: "multi",
+          replies: ["session", "deny"],
+        },
+        {
+          ...sequence("fg-trust-bg-asks", false, true),
+          approval: "multi",
+          replies: ["session", "deny"],
+        },
+      ];
+      evidence.backgroundInteractive = await boot({
+        name: "approval",
+        root: `${root}/background-interactive`,
+        baseURL,
+        aar,
+        modelRequests,
+        cases,
+        pluginOptions: {
+          allowBackground: true,
+          approvalMode: "interactive",
+          approvalTimeoutMs: 2000,
+        },
+      });
+      cases = [
+        {
+          name: "bg-never-ask",
+          call: {
+            tool: "shell",
+            arguments: {
+              command:
+                "FIXTURE=fixture-ask sh -c 'echo once >> bg-never-ask.marker'",
+              background: true,
+            },
+          },
+          marker: "bg-never-ask.marker",
+          adapter: true,
+          watchPending: true,
+          repeat: 2,
+        },
+      ];
+      evidence.backgroundNeverAsk = await boot({
+        name: "background-never-ask",
+        root: `${root}/background-never-ask`,
+        baseURL,
+        aar,
+        modelRequests,
+        cases,
+        adapterControl: true,
+        pluginOptions: { allowBackground: true },
+      });
+      cases = [
+        {
+          name: "bg-passthrough",
+          call: {
+            tool: "shell",
+            arguments: {
+              command: "touch bg-passthrough.marker fixture-nonzero",
+              background: true,
+            },
+          },
+          marker: "bg-passthrough.marker",
+          expectMarker: true,
+        },
+      ];
+      evidence.backgroundPassthrough = await boot({
+        name: "background-passthrough",
+        root: `${root}/background-passthrough`,
+        baseURL,
+        binaryPath: await writeCheckFixture(`${root}/background-passthrough`),
+        modelRequests,
+        cases,
+        pluginOptions: {
+          allowBackground: true,
+          onReviewerFailure: "passthrough",
+          timeoutMs: 1500,
+        },
+      });
+      cases = [
+        {
+          name: "bg-default-reject",
+          call: {
+            tool: "shell",
+            arguments: {
+              command: "touch bg-default-reject.marker",
+              background: true,
+            },
+          },
+          marker: "bg-default-reject.marker",
+          expectMarker: false,
+        },
+      ];
+      evidence.backgroundDefault = await boot({
+        name: "background-default",
+        root: `${root}/background-default`,
+        baseURL,
+        aar,
+        modelRequests,
+        cases,
+      });
+      evidence.assessorRequests = assessorRequests.map((body) =>
+        JSON.stringify(body.messages),
+      );
+      await writeFile(
+        `${root}/results.json`,
+        JSON.stringify(evidence, null, 2),
+      );
+      console.log(`Background grants evidence: ${root}/results.json`);
+      return evidence;
+    }
     cases = mainCases(`${root}/main`);
     evidence.main = await boot({
       name: "main",
@@ -904,6 +1094,50 @@ exec '${aar}' "$@"
       cases,
       shell: "/bin/sh",
     });
+    cases = [
+      {
+        name: "background-allow",
+        call: {
+          tool: "shell",
+          arguments: {
+            command: "touch background-allow.marker",
+            background: true,
+          },
+        },
+        marker: "background-allow.marker",
+        expectMarker: true,
+      },
+      {
+        name: "background-deny",
+        call: {
+          tool: "shell",
+          arguments: {
+            command: "printf '%s' fixture-deny; touch background-deny.marker",
+            background: true,
+          },
+        },
+        marker: "background-deny.marker",
+        expectMarker: false,
+      },
+      {
+        name: "foreground-unchanged",
+        call: {
+          tool: "shell",
+          arguments: { command: "touch foreground-unchanged.marker" },
+        },
+        marker: "foreground-unchanged.marker",
+        expectMarker: true,
+      },
+    ];
+    evidence.background = await boot({
+      name: "background",
+      root: `${root}/background`,
+      baseURL,
+      aar,
+      modelRequests,
+      cases,
+      pluginOptions: { allowBackground: true },
+    });
     evidence.assessorRequests = assessorRequests.map((body) =>
       JSON.stringify(body.messages),
     );
@@ -916,6 +1150,24 @@ exec '${aar}' "$@"
     await new Promise((resolve) => provider.close(resolve));
     await packed?.close();
   }
+}
+
+async function probeMarker(markerPath, waitMs) {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    if (
+      await access(markerPath)
+        .then(() => true)
+        .catch(() => false)
+    )
+      return true;
+    if (Date.now() >= deadline) return false;
+    await delay(50);
+  }
+}
+
+function commandArguments(step) {
+  return typeof step === "string" ? { command: step } : (step ?? {});
 }
 
 function single(name) {
@@ -1486,7 +1738,7 @@ async function bootHost(config) {
       }
       if (scenario.script)
         await writeFile(
-          `${directory}/${scenario.approval === "session" ? "trusted.sh" : scenario.approval === "script-deny" ? "denied-script.sh" : "mutable.sh"}`,
+          `${directory}/${scenario.scriptFile ?? (scenario.approval === "session" ? "trusted.sh" : scenario.approval === "script-deny" ? "denied-script.sh" : "mutable.sh")}`,
           scenario.script,
         );
       if (config.longHuman || config.layout)
@@ -1554,7 +1806,39 @@ async function bootHost(config) {
       }
       let pending = null;
       let reply = null;
-      if (scenario.approval) {
+      let pendings = null;
+      if (scenario.approval === "multi") {
+        pendings = [];
+        reply = [];
+        for (const decision of scenario.replies) {
+          let next = null;
+          for (let index = 0; index < 100; index++) {
+            const listed = await rpc("list", { clientID, sessionID });
+            next = listed.find((item) => item.sessionID === sessionID);
+            if (next) break;
+            await delay(50);
+          }
+          if (!next)
+            throw Error(
+              `No pending approval for ${scenario.name} (${decision})`,
+            );
+          pendings.push(next);
+          reply.push(
+            await rpc("reply", {
+              clientID,
+              pendingID: next.pendingID,
+              sessionID,
+              messageID: next.messageID,
+              callID: next.callID,
+              intentGeneration: next.intentGeneration,
+              fingerprint: next.fingerprint,
+              decision,
+            }),
+          );
+        }
+        pending = pendings[0];
+      }
+      if (scenario.approval && scenario.approval !== "multi") {
         for (let index = 0; index < 100; index++) {
           const listed = await rpc("list", { clientID, sessionID });
           pending = listed.find((item) => item.sessionID === sessionID);
@@ -1712,9 +1996,10 @@ async function bootHost(config) {
         ? path.resolve(directory, scenario.marker)
         : null;
       const marker = markerPath
-        ? await access(markerPath)
-            .then(() => true)
-            .catch(() => false)
+        ? await probeMarker(
+            markerPath,
+            scenario.call?.arguments?.background === true ? 5000 : 0,
+          )
         : null;
       let ownedRunning = null;
       let lateEffect = null;
@@ -1737,6 +2022,7 @@ async function bootHost(config) {
         lateEffect,
         sessionID,
         pending,
+        pendings,
         reply,
         remaining,
         ...(config.unavailableAlerts

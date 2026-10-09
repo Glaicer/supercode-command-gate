@@ -10,6 +10,7 @@ export type GateConfig = {
   timeoutMs: number;
   approvalTimeoutMs: number;
   approvalMode: "never-ask" | "interactive";
+  allowBackground: boolean;
   onReviewerFailure: "deny" | "passthrough";
   commandRewriter: "none" | "rtk";
   rewriterPath: string;
@@ -67,6 +68,12 @@ export function resolveConfig(
   if (!["never-ask", "interactive"].includes(approvalMode))
     errors.push("approvalMode must be never-ask or interactive");
 
+  if (
+    options.allowBackground !== undefined &&
+    typeof options.allowBackground !== "boolean"
+  )
+    errors.push("allowBackground must be a boolean");
+
   const onReviewerFailure = normalizeText(
     options.onReviewerFailure ?? env.AAR_GATE_ON_REVIEWER_FAILURE ?? "deny",
   );
@@ -91,6 +98,7 @@ export function resolveConfig(
     timeoutMs,
     approvalTimeoutMs,
     approvalMode: approvalMode === "interactive" ? "interactive" : "never-ask",
+    allowBackground: options.allowBackground === true,
     commandRewriter: commandRewriter === "rtk" ? "rtk" : "none",
     rewriterPath: rewriterPath || "rtk",
     onReviewerFailure:
