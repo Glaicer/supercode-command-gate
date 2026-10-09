@@ -31,6 +31,7 @@ import {
 } from "./reviewer.ts";
 import {
   GateState,
+  authorizingKey,
   goalFromMetadata,
   type AuthorizingRecord,
   type CallIdentity,
@@ -218,6 +219,7 @@ export default Plugin.define({
       const epochs = new Map<string, number>();
       const parents = new Map<string, string>();
       const requests = new Map<string, Request>();
+      const backgroundCalls = new Set<string>();
       const goals = new Map<string, string>();
       const admissions = new Map<string, Set<string>>();
       const invalidate = (sessionID: string, event: string) =>
@@ -484,6 +486,7 @@ export default Plugin.define({
       const reviewInvocation = (
         invocation: ShellCreateBefore,
         call: CallIdentity,
+        background: boolean,
       ) =>
         Effect.gen(function* () {
           if (
@@ -549,6 +552,7 @@ export default Plugin.define({
                 goal,
                 latestUserRequest: intent?.text ?? null,
                 assistantRationale,
+                ...(background ? { background: true } : {}),
               },
               ctx.location.directory,
             );
@@ -585,6 +589,7 @@ export default Plugin.define({
             shell: invocation.shell,
             intentId: request.session.intentId,
             goal: request.intent.goal,
+            ...(background ? { background: true } : {}),
           };
           const operationalFailure = (
             reason: string,
@@ -785,6 +790,7 @@ export default Plugin.define({
                     goal: current.goal,
                     latestUserRequest: current.intent?.text ?? null,
                     assistantRationale: current.assistantRationale,
+                    ...(background ? { background: true } : {}),
                   },
                   ctx.location.directory,
                 );
@@ -923,7 +929,10 @@ export default Plugin.define({
                       ),
                     }),
                   );
-                if ((input as { background?: unknown })?.background === true)
+                if (
+                  (input as { background?: unknown })?.background === true &&
+                  !config.allowBackground
+                )
                   return Effect.fail(
                     new ToolError({
                       message: blockedMessage(
@@ -981,11 +990,21 @@ export default Plugin.define({
           if (!config.tools.includes(event.tool.toLowerCase())) return;
           const input = event.input as { background?: unknown };
           if (input?.background === true) {
-            return yield* Effect.fail(
-              new ToolError({
-                message: blockedMessage(
-                  "background execution is outside Command Gate coverage in this release",
-                ),
+            if (!config.allowBackground) {
+              return yield* Effect.fail(
+                new ToolError({
+                  message: blockedMessage(
+                    "background execution is outside Command Gate coverage in this release",
+                  ),
+                }),
+              );
+            }
+            backgroundCalls.add(
+              authorizingKey({
+                location: ctx.location.directory,
+                sessionID: event.sessionID,
+                messageID: event.messageID,
+                callID: event.id,
               }),
             );
           }
@@ -1010,8 +1029,9 @@ export default Plugin.define({
             locks.set(call.sessionID, lock);
           }
           const shell = invocation.shell;
+          const background = backgroundCalls.has(authorizingKey(call));
           const outcome = yield* Effect.raceFirst(
-            lock.withPermit(reviewInvocation(invocation, call)),
+            lock.withPermit(reviewInvocation(invocation, call, background)),
             Deferred.await(shutdown).pipe(
               Effect.as(deny("Command Gate was unloaded during review")),
             ),
@@ -1028,6 +1048,7 @@ export default Plugin.define({
               goal: outcome.request.intent.goal,
               latestUserRequest: outcome.request.intent.latestUserRequest,
               assistantRationale: outcome.request.intent.assistantRationale,
+              ...(background ? { background: true } : {}),
             },
             ctx.location.directory,
           );
@@ -1047,12 +1068,14 @@ export default Plugin.define({
       yield* ctx.tool.hook("execute.after", (event) =>
         Effect.sync(() => {
           if (!config.tools.includes(event.tool.toLowerCase())) return;
-          state.release({
+          const identity = {
             location: ctx.location.directory,
             sessionID: event.sessionID,
             messageID: event.messageID,
             callID: event.id,
-          });
+          };
+          backgroundCalls.delete(authorizingKey(identity));
+          state.release(identity);
         }),
       );
 

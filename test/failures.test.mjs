@@ -21,6 +21,20 @@ test("explicit passthrough labels operational failures as unreviewed; defaults a
       else assert.match(result.toolResult, /command was not executed/i);
     }
   }
+  const invalidBackground = evidence.backgroundInvalid.cases[0];
+  assert.equal(invalidBackground.marker, false);
+  assert.match(
+    invalidBackground.toolResult,
+    /background execution is outside/i,
+    "an invalid allowBackground value fails closed for background calls",
+  );
+  assert.equal(invalidBackground.finished, true);
+  assert.ok(
+    evidence.backgroundInvalid.gateEvents.some(
+      (event) => event.kind === "startup-unavailable",
+    ),
+    "the invalid option is a configuration error",
+  );
   for (const boot of evidence.startupFailures) {
     const result = boot.cases[0];
     const unreviewed =
