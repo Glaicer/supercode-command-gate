@@ -8,6 +8,7 @@ export type Request = {
   cwd: string;
   workspaceRoot: string | null;
   env: Record<string, string>;
+  background?: boolean;
   session: { id: string; host: string; intentId: string };
   intent: {
     goal: string | null;
@@ -29,6 +30,7 @@ export type SessionFacts = {
   goal: string | null;
   latestUserRequest: string | null;
   assistantRationale?: string | null;
+  background?: boolean;
 };
 
 export function assistantRationaleFor(
@@ -106,6 +108,7 @@ export function buildRequest(
     workspaceRoot:
       workspaceRoot === null ? null : canonicalDirectory(workspaceRoot),
     env: materialEnvSubset(invocation.env),
+    ...(facts.background ? { background: true } : {}),
     executionEnvDigest: createHash("sha256")
       .update(
         JSON.stringify(

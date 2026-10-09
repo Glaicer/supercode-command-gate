@@ -594,6 +594,29 @@ exec '${aar}' "$@"
           pluginOptions: { timeoutMs: 1500, ...pluginOptions },
         });
       }
+      cases = [
+        {
+          name: "background-invalid-option",
+          call: {
+            tool: "shell",
+            arguments: {
+              command: "touch background-invalid.marker",
+              background: true,
+            },
+          },
+          marker: "background-invalid.marker",
+          expectMarker: false,
+        },
+      ];
+      evidence.backgroundInvalid = await boot({
+        name: "background-invalid",
+        root: `${root}/background-invalid`,
+        baseURL,
+        aar,
+        modelRequests,
+        cases,
+        pluginOptions: { allowBackground: "yes" },
+      });
       evidence.startupFailures = [];
       for (const mode of ["deny", "passthrough"]) {
         for (const failure of ["missing", "unhealthy", "contract", "config"]) {
@@ -904,6 +927,50 @@ exec '${aar}' "$@"
       cases,
       shell: "/bin/sh",
     });
+    cases = [
+      {
+        name: "background-allow",
+        call: {
+          tool: "shell",
+          arguments: {
+            command: "touch background-allow.marker",
+            background: true,
+          },
+        },
+        marker: "background-allow.marker",
+        expectMarker: true,
+      },
+      {
+        name: "background-deny",
+        call: {
+          tool: "shell",
+          arguments: {
+            command: "printf '%s' fixture-deny; touch background-deny.marker",
+            background: true,
+          },
+        },
+        marker: "background-deny.marker",
+        expectMarker: false,
+      },
+      {
+        name: "foreground-unchanged",
+        call: {
+          tool: "shell",
+          arguments: { command: "touch foreground-unchanged.marker" },
+        },
+        marker: "foreground-unchanged.marker",
+        expectMarker: true,
+      },
+    ];
+    evidence.background = await boot({
+      name: "background",
+      root: `${root}/background`,
+      baseURL,
+      aar,
+      modelRequests,
+      cases,
+      pluginOptions: { allowBackground: true },
+    });
     evidence.assessorRequests = assessorRequests.map((body) =>
       JSON.stringify(body.messages),
     );
@@ -915,6 +982,20 @@ exec '${aar}' "$@"
     provider.closeAllConnections();
     await new Promise((resolve) => provider.close(resolve));
     await packed?.close();
+  }
+}
+
+async function probeMarker(markerPath, waitMs) {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    if (
+      await access(markerPath)
+        .then(() => true)
+        .catch(() => false)
+    )
+      return true;
+    if (Date.now() >= deadline) return false;
+    await delay(50);
   }
 }
 
@@ -1712,9 +1793,10 @@ async function bootHost(config) {
         ? path.resolve(directory, scenario.marker)
         : null;
       const marker = markerPath
-        ? await access(markerPath)
-            .then(() => true)
-            .catch(() => false)
+        ? await probeMarker(
+            markerPath,
+            scenario.call?.arguments?.background === true ? 5000 : 0,
+          )
         : null;
       let ownedRunning = null;
       let lateEffect = null;

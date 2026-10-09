@@ -400,6 +400,7 @@ export function fingerprintFor(request: Request): string {
     command: request.command,
     cwd: request.cwd,
     workspaceRoot: request.workspaceRoot,
+    ...(request.background ? { background: true } : {}),
     sessionId: request.session.id,
     intentId: request.session.intentId ?? "",
     policyVersion: "deterministic-v2",

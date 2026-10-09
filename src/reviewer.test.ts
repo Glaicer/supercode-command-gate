@@ -253,3 +253,9 @@ test("reviewed composition provenance requires complete valid node coverage", ()
     );
   }
 });
+
+test("the background fact feeds the request fingerprint without touching foreground bytes", () => {
+  const base = fingerprintFor(request);
+  assert.equal(fingerprintFor({ ...request, background: undefined }), base);
+  assert.notEqual(fingerprintFor({ ...request, background: true }), base);
+});

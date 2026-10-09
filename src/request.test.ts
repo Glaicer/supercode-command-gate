@@ -190,3 +190,23 @@ test("launch environment changes invalidate trust without disclosing secret valu
   assert.notEqual(first.executionEnvDigest, changed.executionEnvDigest);
   assert.equal(JSON.stringify(first).includes("SECRET_TOKEN"), false);
 });
+
+test("the background fact is carried only when the invocation requested background", () => {
+  const facts = {
+    sessionID: "ses_1",
+    intentId: "msg_1",
+    goal: null,
+    latestUserRequest: null,
+  };
+  const invocation = { command: "pwd", cwd: process.cwd(), env: {} };
+  const foreground = buildRequest(invocation, facts, null);
+  const background = buildRequest(
+    invocation,
+    { ...facts, background: true },
+    null,
+  );
+  assert.equal(background.background, true);
+  assert.equal("background" in foreground, false);
+  assert.equal(JSON.stringify(foreground).includes("background"), false);
+  assert.notEqual(JSON.stringify(foreground), JSON.stringify(background));
+});
