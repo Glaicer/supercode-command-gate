@@ -293,6 +293,37 @@ export async function runSeam(options = {}) {
       });
       cases = [
         {
+          name: "late-background-true",
+          call: {
+            tool: "shell",
+            arguments: { command: "touch late-background-true.marker" },
+          },
+          marker: "late-background-true.marker",
+        },
+        {
+          name: "late-background-false",
+          call: {
+            tool: "shell",
+            arguments: {
+              command: "touch late-background-false.marker",
+              background: true,
+            },
+          },
+          marker: "late-background-false.marker",
+        },
+      ];
+      evidence.integrityBackground = await boot({
+        name: "integrity-background",
+        root: `${root}/integrity-background`,
+        baseURL,
+        aar,
+        modelRequests,
+        cases,
+        integrity: true,
+        pluginOptions: { allowBackground: true },
+      });
+      cases = [
+        {
           name: "early-shell",
           call: {
             tool: "shell",

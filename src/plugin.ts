@@ -940,6 +940,26 @@ export default Plugin.define({
                       ),
                     }),
                   );
+                if (config.allowBackground) {
+                  const reviewed = backgroundCalls.has(
+                    authorizingKey({
+                      location: ctx.location.directory,
+                      sessionID: call.sessionID,
+                      messageID: call.messageID,
+                      callID: call.id,
+                    }),
+                  );
+                  const actual =
+                    (input as { background?: unknown })?.background === true;
+                  if (reviewed !== actual)
+                    return Effect.fail(
+                      new ToolError({
+                        message: blockedMessage(
+                          "late mutation changed reviewed invocation background; disable the conflicting shell mutator",
+                        ),
+                      }),
+                    );
+                }
                 return execute(input, call);
               }).pipe(
                 Effect.raceFirst(
@@ -1007,6 +1027,31 @@ export default Plugin.define({
                 callID: event.id,
               }),
             );
+          }
+          if (
+            config.allowBackground &&
+            input !== null &&
+            typeof input === "object" &&
+            "background" in input
+          ) {
+            const fact = input.background === true;
+            try {
+              Object.defineProperty(input, "background", {
+                enumerable: true,
+                configurable: false,
+                get: () => fact,
+                set: (next: unknown) => {
+                  if (next === fact) return;
+                  throw new ToolError({
+                    message: blockedMessage(
+                      "late mutation changed reviewed invocation background; disable the conflicting shell mutator",
+                    ),
+                  });
+                },
+              });
+            } catch {
+              // a foreign seal may own the property; the execute wrapper still refuses mismatches
+            }
           }
         }),
       );
