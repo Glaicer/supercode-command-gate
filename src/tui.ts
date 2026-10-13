@@ -13,6 +13,7 @@ import {
 export default Plugin.define({
   id: "command-gate-tui",
   setup(ctx) {
+    if (process.env.OPENCODE_SANDBOX_MODE === "sandboxed") return;
     if (ctx.options.enabled === false) return;
     const rpc = ctx.client.rpc(Approvals);
     const clientID = crypto.randomUUID();

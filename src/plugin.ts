@@ -160,6 +160,7 @@ export default Plugin.define({
   id: "command-gate",
   effect: (ctx) =>
     Effect.gen(function* () {
+      if (process.env.OPENCODE_SANDBOX_MODE === "sandboxed") return;
       if (ctx.options.enabled === false) return;
       const config = resolveConfig(ctx.options);
       const state = new GateState();

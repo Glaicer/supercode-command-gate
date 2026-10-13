@@ -115,6 +115,15 @@ simply refused. If you'd rather decide yourself, set `approvalMode` to
 `interactive` — you get a dialog with the risks, the full command, and
 **Allow once**, **Trust for this session**, or **Deny**.
 
+### Sandboxed launches
+
+When the server and TUI inherit `OPENCODE_SANDBOX_MODE=sandboxed`, Command Gate
+registers nothing: no Reviewer startup check, command rewriting, policy checks,
+background restrictions, or approval UI. Missing or other values preserve the
+configured behavior. This is a trusted launcher marker, not sandbox detection or
+proof of isolation. OpenCode permissions remain independent. External services
+are not checked before bypassing the Gate.
+
 ### Everyday commands
 
 ```sh
