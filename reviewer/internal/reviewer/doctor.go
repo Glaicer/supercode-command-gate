@@ -43,7 +43,10 @@ func doctorConnections(config AssessorConfig) []DoctorConnection {
 	for index, connection := range assessorConnections(config) {
 		_, err := assessorAPIKey(AssessorConfig{APIKeyEnv: connection.APIKeyEnv})
 		if connection.AuthMode == "codex" || connection.AuthMode == "opencode" {
-			err = validateSubscriptionCredentials(config)
+			subscriptionConfig := config
+			subscriptionConfig.AuthMode = connection.AuthMode
+			subscriptionConfig.AuthJSONPath = connection.AuthJSONPath
+			err = validateSubscriptionCredentials(subscriptionConfig)
 		}
 		result = append(result, DoctorConnection{Connection: connectionLabel(index), CredentialAvailable: err == nil})
 	}
@@ -104,7 +107,10 @@ func validateAssessorConfiguration(config Config) error {
 	var subscriptionErr error
 	for index, connection := range assessorConnections(config.Assessor) {
 		if connection.AuthMode == "codex" || connection.AuthMode == "opencode" {
-			subscriptionErr = validateSubscriptionCredentials(config.Assessor)
+			subscriptionConfig := config.Assessor
+			subscriptionConfig.AuthMode = connection.AuthMode
+			subscriptionConfig.AuthJSONPath = connection.AuthJSONPath
+			subscriptionErr = validateSubscriptionCredentials(subscriptionConfig)
 			available = available || subscriptionErr == nil
 			continue
 		}

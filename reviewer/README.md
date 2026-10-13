@@ -106,13 +106,17 @@ options = { temperature = 0.2 }
 contextWindow = 32768
 ```
 
-Each fallback requires its own `model`, `baseUrl`, and `apiKeyEnv`; these fields
-and its `options` do not inherit primary values. Omitted `options` means an empty
-map. Optional `contextWindow` overrides the shared model-keyed `contextWindows`
-capacity hint for that connection. Evidence is never truncated. Keep credentials
-in environment variables, never TOML. URLs must use HTTPS except loopback test
-servers, and cannot contain userinfo, query parameters or fragments. Redirects
-are rejected so credentials cannot be forwarded to another endpoint.
+Each API-key fallback requires its own `model`, `baseUrl`, and `apiKeyEnv`; these
+fields and its `options` do not inherit primary values. A fallback can instead
+set `authMode = "opencode"` and a `model` to use the active OpenCode subscription;
+omit `baseUrl` and `apiKeyEnv` for that connection. The top-level
+`onUnavailable` applies to the entire assessor chain. Omitted `options` means an
+empty map. Optional `contextWindow` overrides the shared model-keyed
+`contextWindows` capacity hint for that connection. Evidence is never truncated.
+Keep credentials in environment variables, never TOML. URLs must use HTTPS
+except loopback test servers, and cannot contain userinfo, query parameters or
+fragments. Redirects are rejected so credentials cannot be forwarded to another
+endpoint.
 
 The existing `fallbackModels` retains model-only switching on the primary URL,
 key and options; configuring both nonempty `fallbackModels` and `fallbacks` is
@@ -207,11 +211,13 @@ Subscription requests go only to
 `https://chatgpt.com/backend-api/codex/responses`; redirects are rejected.
 Primary `baseUrl` and `apiKeyEnv` are rejected, so OAuth credentials cannot
 reach another host. `authMode = "opencode"` supports explicitly configured API-key
-`fallbacks`: each uses its own endpoint, key and options. A missing/expired owner
-credential can fall back, and Doctor succeeds when at least one connection is
-ready. This can incur separate API billing; without explicit configuration there
-is no paid API fallback. Legacy Codex mode still rejects independent API
-fallbacks. Explicit `fallbackModels` stay on the subscription transport.
+`fallbacks`: API-key connections use their own endpoint, key and options, while a
+fallback with `authMode = "opencode"` uses the active subscription. A
+missing/expired subscription credential can fall through to a later connection,
+and Doctor succeeds when at least one connection is ready. API-key connections
+can incur separate API billing; without explicit configuration there is no paid
+API fallback. Legacy Codex mode still rejects independent API fallbacks.
+Explicit `fallbackModels` stay on the primary subscription transport.
 Project overlays keep the existing scalar inheritance rules; when switching modes,
 explicitly clear incompatible inherited fields (for example `baseUrl = ""`,
 `apiKeyEnv = ""`, `fallbacks = []`, or `authJsonPath = ""` for API-key or OpenCode mode).

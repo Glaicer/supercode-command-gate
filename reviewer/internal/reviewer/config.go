@@ -202,11 +202,28 @@ func normalizeConfig(config Config) (Config, error) {
 		return Config{}, errors.New("assessor.fallbackModels and assessor.fallbacks cannot be combined")
 	}
 	for index, connection := range config.Assessor.Fallbacks {
-		if strings.TrimSpace(connection.Model) == "" || connection.BaseURL == "" || connection.APIKeyEnv == "" {
-			return Config{}, fmt.Errorf("assessor.fallbacks[%d] requires model, baseUrl, and apiKeyEnv", index)
+		if connection.AuthMode != "" && connection.AuthMode != "api-key" && connection.AuthMode != "opencode" {
+			return Config{}, fmt.Errorf("assessor.fallbacks[%d].authMode must be api-key or opencode", index)
 		}
-		if _, err := chatCompletionsURL(connection.BaseURL); err != nil {
-			return Config{}, fmt.Errorf("assessor.fallbacks[%d]: %w", index, err)
+		if strings.TrimSpace(connection.Model) == "" {
+			return Config{}, fmt.Errorf("assessor.fallbacks[%d].model is required", index)
+		}
+		if connection.AuthMode == "opencode" {
+			if connection.AuthJSONPath != "" || connection.BaseURL != "" || connection.APIKeyEnv != "" {
+				return Config{}, fmt.Errorf("assessor.fallbacks[%d] opencode auth cannot configure authJsonPath, baseUrl, or apiKeyEnv", index)
+			}
+			for key := range connection.Options {
+				if key != "reasoning" && key != "text" && key != "service_tier" {
+					return Config{}, fmt.Errorf("assessor.fallbacks[%d].options supports only reasoning, text, and service_tier with opencode auth", index)
+				}
+			}
+		} else {
+			if connection.BaseURL == "" || connection.APIKeyEnv == "" {
+				return Config{}, fmt.Errorf("assessor.fallbacks[%d] API-key auth requires baseUrl and apiKeyEnv", index)
+			}
+			if _, err := chatCompletionsURL(connection.BaseURL); err != nil {
+				return Config{}, fmt.Errorf("assessor.fallbacks[%d]: %w", index, err)
+			}
 		}
 		if connection.ContextWindow < 0 {
 			return Config{}, fmt.Errorf("assessor.fallbacks[%d].contextWindow must be nonnegative", index)
@@ -365,12 +382,14 @@ func applyConfigValues(config *Config, values map[string]any) error {
 				connection := AssessorConnection{}
 				for key, value := range item {
 					switch key {
-					case "model", "baseUrl", "apiKeyEnv":
+					case "authMode", "model", "baseUrl", "apiKeyEnv":
 						text, ok := value.(string)
 						if !ok {
 							return fmt.Errorf("assessor.fallbacks[%d].%s must be a string", index, key)
 						}
 						switch key {
+						case "authMode":
+							connection.AuthMode = text
 						case "model":
 							connection.Model = text
 						case "baseUrl":
