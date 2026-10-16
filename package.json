@@ -5,6 +5,23 @@
   "private": false,
   "type": "module",
   "description": "OpenCode V2 Command Gate for the aar Command Reviewer",
+  "license": "MIT",
+  "author": "Glaicer",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Glaicer/supercode-command-gate.git"
+  },
+  "homepage": "https://github.com/Glaicer/supercode-command-gate#readme",
+  "bugs": {
+    "url": "https://github.com/Glaicer/supercode-command-gate/issues"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "command-gate",
+    "permissions",
+    "safety"
+  ],
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
@@ -15,13 +32,15 @@
   },
   "files": [
     "README.md",
+    "LICENSE",
     "index.js",
     "tui.js",
     "rpc.js",
     "dist"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
     "test": "node --test 'src/**/*.test.ts'",
@@ -29,7 +48,8 @@
     "test:approval": "node --test test/approval.test.mjs",
     "compile": "tsc --project tsconfig.release.json",
     "compile:tui": "tsc --project tsconfig.release.json",
-    "prepack": "pnpm compile",
+    "prepack": "pnpm compile && pnpm test:package",
+    "prepublishOnly": "pnpm typecheck && pnpm format:check && pnpm test",
     "test:package": "node --test test/package.test.mjs",
     "test:packed": "GATE_PACKED=1 node --test --test-concurrency=1 'test/*.test.mjs'",
     "test:all": "node --test --test-concurrency=1 'src/**/*.test.ts' 'test/*.test.mjs'",
