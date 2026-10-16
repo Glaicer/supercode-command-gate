@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "name": "@supercode/command-gate",
+  "name": "@glaicer/supercode-command-gate",
   "version": "1.0.5",
   "private": false,
   "type": "module",
