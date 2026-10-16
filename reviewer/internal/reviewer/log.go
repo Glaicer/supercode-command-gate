@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -16,6 +17,14 @@ type reviewLog struct {
 	db  *sql.DB
 	id  string
 	err error
+}
+
+func reviewDatabaseURI(path string) url.URL {
+	path = filepath.ToSlash(path)
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return url.URL{Scheme: "file", Path: path}
 }
 
 func newReviewLog(configured string) (*reviewLog, error) {
@@ -42,7 +51,7 @@ func newReviewLog(configured string) (*reviewLog, error) {
 	if err := file.Close(); err != nil {
 		return nil, err
 	}
-	dsn := url.URL{Scheme: "file", Path: path}
+	dsn := reviewDatabaseURI(path)
 	query := url.Values{"mode": {"rw"}, "_pragma": {"busy_timeout(1000)"}}
 	dsn.RawQuery = query.Encode()
 	db, err := sql.Open("sqlite", dsn.String())

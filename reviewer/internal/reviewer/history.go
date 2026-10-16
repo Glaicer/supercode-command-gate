@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"golang.org/x/sys/unix"
 )
 
 func historyLock(stateDir string, exclusive bool) (func(), error) {
@@ -28,19 +26,15 @@ func historyLock(stateDir string, exclusive bool) (func(), error) {
 		return nil, err
 	}
 	defer root.Close()
-	file, err := root.OpenFile("history.lock", os.O_CREATE|os.O_RDWR|unix.O_NOFOLLOW, 0600)
+	file, err := openStateFile(root, "history.lock", os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("open history lock: %w", err)
 	}
-	operation := unix.LOCK_SH
-	if exclusive {
-		operation = unix.LOCK_EX
-	}
-	if err := unix.Flock(int(file.Fd()), operation|unix.LOCK_NB); err != nil {
+	if err := lockStateFile(file, exclusive, true); err != nil {
 		file.Close()
 		return nil, fmt.Errorf("review history is busy: %w", err)
 	}
-	return func() { _ = unix.Flock(int(file.Fd()), unix.LOCK_UN); _ = file.Close() }, nil
+	return func() { unlockStateFile(file); _ = file.Close() }, nil
 }
 
 func Cleanup(options Options) (int, error) {
@@ -130,7 +124,7 @@ func cleanupReviewDatabase(path string) error {
 	if err != nil {
 		return err
 	}
-	dsn := url.URL{Scheme: "file", Path: path}
+	dsn := reviewDatabaseURI(path)
 	dsn.RawQuery = url.Values{"mode": {"rw"}, "_pragma": {"busy_timeout(1000)"}}.Encode()
 	db, err := sql.Open("sqlite", dsn.String())
 	if err != nil {

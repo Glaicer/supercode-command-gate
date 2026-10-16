@@ -7,8 +7,6 @@ import (
 	"io"
 	"os"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 type UsageStats struct {
@@ -63,25 +61,21 @@ func statsRoot(stateDir string, write bool) (*os.Root, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	file, err := root.OpenFile("stats.lock", os.O_CREATE|os.O_RDWR|unix.O_NOFOLLOW, 0600)
+	file, err := openStateFile(root, "stats.lock", os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		root.Close()
 		return nil, nil, err
 	}
-	mode := unix.LOCK_SH
-	if write {
-		mode = unix.LOCK_EX
-	}
-	if err := unix.Flock(int(file.Fd()), mode); err != nil {
+	if err := lockStateFile(file, write, false); err != nil {
 		file.Close()
 		root.Close()
 		return nil, nil, err
 	}
-	return root, func() { _ = unix.Flock(int(file.Fd()), unix.LOCK_UN); _ = file.Close() }, nil
+	return root, func() { unlockStateFile(file); _ = file.Close() }, nil
 }
 
 func readStats(root *os.Root) (UsageStats, error) {
-	file, err := root.OpenFile("stats.json", os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	file, err := openStateFile(root, "stats.json", os.O_RDONLY, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return UsageStats{Version: 1}, nil
 	}
@@ -153,7 +147,7 @@ func recordStats(stateDir string, decision Decision, resultErr error) error {
 	if err != nil {
 		return err
 	}
-	file, err := root.OpenFile("stats.json.tmp", os.O_CREATE|os.O_TRUNC|os.O_WRONLY|unix.O_NOFOLLOW, 0600)
+	file, err := openStateFile(root, "stats.json.tmp", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}

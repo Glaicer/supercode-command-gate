@@ -14,16 +14,21 @@ esac
 output_dir="${AAR_RELEASE_DIR:-dist/reviewer-v${version}}"
 mkdir -p "$output_dir"
 
-for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64 windows-arm64; do
   case "$target" in
     linux-amd64) os=linux; arch=amd64 ;;
     linux-arm64) os=linux; arch=arm64 ;;
     darwin-amd64) os=darwin; arch=amd64 ;;
     darwin-arm64) os=darwin; arch=arm64 ;;
+    windows-amd64) os=windows; arch=amd64 ;;
+    windows-arm64) os=windows; arch=arm64 ;;
     *) echo "unsupported release target: $target" >&2; exit 2 ;;
   esac
 
   binary="$output_dir/aar-v${version}-${os}-${arch}"
+  if [ "$os" = windows ]; then
+    binary="${binary}.exe"
+  fi
   if [ -e "$binary" ]; then
     echo "refusing to overwrite existing release artifact: $binary" >&2
     exit 1
