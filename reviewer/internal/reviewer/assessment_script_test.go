@@ -67,7 +67,7 @@ func TestAssessorReceivesHeredocBodyAsExecutableEvidence(t *testing.T) {
 	}
 }
 
-func TestAssessorReceivesFileEntrypointAndLocalDependencyDigests(t *testing.T) {
+func TestAssessorReceivesFileEntrypointAndLocalDependencySource(t *testing.T) {
 	workspace := t.TempDir()
 	entrypoint := filepath.Join(workspace, "main.py")
 	dependency := filepath.Join(workspace, "helper.py")
@@ -107,13 +107,16 @@ func TestAssessorReceivesFileEntrypointAndLocalDependencyDigests(t *testing.T) {
 	for _, expected := range []string{
 		jsonStringContent(entrypointSource),
 		jsonStringContent(dependencySource),
-		digestFor(entrypointSource),
-		digestFor(dependencySource),
 		`"kind":"entrypoint"`,
 		`"kind":"dependency"`,
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("model prompt does not contain %q: %s", expected, prompt)
+		}
+	}
+	for _, source := range []string{entrypointSource, dependencySource} {
+		if strings.Contains(prompt, digestFor(source)) {
+			t.Fatalf("model prompt carried the local digest of %q: %s", source, prompt)
 		}
 	}
 }

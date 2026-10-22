@@ -24,6 +24,14 @@ type compactPrompt struct {
 		DynamicFeatures []string `json:"dynamicFeatures"`
 		ParseError      string   `json:"parseError"`
 	} `json:"parserHints"`
+	Scripts []struct {
+		Interpreter string `json:"interpreter"`
+		Kind        string `json:"kind"`
+		Path        string `json:"path"`
+		Digest      string `json:"digest"`
+		Status      string `json:"status"`
+		Content     string `json:"content"`
+	} `json:"scripts"`
 	PathHints []struct {
 		Source        string `json:"source"`
 		Role          string `json:"role"`
@@ -470,4 +478,152 @@ func captureCompactPrompt(t *testing.T, request reviewer.Request) (reviewer.Mode
 		t.Fatalf("decode model prompt: %v", err)
 	}
 	return fake.requests[0], prompt
+}
+
+func checkWithPrompt(t *testing.T, request reviewer.Request) (reviewer.Decision, reviewer.ModelCallRequest) {
+	t.Helper()
+	fake := &fakeModelCall{responses: []string{`{"risks":[],"uncertainties":[]}`}}
+	decision, err := reviewer.Check(request, reviewer.Options{
+		StateDir: t.TempDir(),
+		Config: &reviewer.Config{Assessor: reviewer.AssessorConfig{
+			Model: "primary", OnUnavailable: "deny",
+		}},
+		ModelCall: fake,
+	})
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(fake.requests))
+	}
+	return decision, fake.requests[0]
+}
+
+func TestAssessorPromptRedactsContextSecretsWithoutTouchingFingerprintInputs(t *testing.T) {
+	build := func(secret string) reviewer.Request {
+		request := assessorRequest(t, "custom-cleanup")
+		request.Intent = reviewer.Intent{
+			Goal:               "rotate api_key=" + secret + " for the deploy",
+			LatestUserRequest:  "use password=" + secret + " to log in",
+			Purpose:            "run with token: " + secret,
+			AssistantRationale: "the environment holds OPENROUTER_API_KEY=sk-" + secret + " and AKIA" + strings.ToUpper(secret),
+		}
+		return request
+	}
+
+	firstDecision, first := checkWithPrompt(t, build("firstsecretvalue"))
+	secondDecision, second := checkWithPrompt(t, build("secondsecretvalue"))
+	for label, prompt := range map[string]string{"first": first.UserPrompt, "second": second.UserPrompt} {
+		if strings.Contains(prompt, "secretvalue") {
+			t.Fatalf("%s prompt leaked a secret: %s", label, prompt)
+		}
+		if !strings.Contains(prompt, "[REDACTED]") {
+			t.Fatalf("%s prompt did not mark redacted context: %s", label, prompt)
+		}
+	}
+	if firstDecision.RequestFingerprint == secondDecision.RequestFingerprint {
+		t.Fatal("redaction changed the fingerprint inputs; raw intent text must still bind the fingerprint")
+	}
+}
+
+func TestAssessorPromptOmitsPathFromTrustedEnv(t *testing.T) {
+	build := func(path string) reviewer.Request {
+		request := assessorRequest(t, "custom-cleanup")
+		request.Env["PATH"] = path
+		return request
+	}
+
+	firstDecision, first := checkWithPrompt(t, build("/tmp/hijack:/usr/local/bin:/usr/bin"))
+	secondDecision, second := checkWithPrompt(t, build("/usr/local/bin:/usr/bin"))
+	for label, prompt := range map[string]string{"first": first.UserPrompt, "second": second.UserPrompt} {
+		trustedEnv, ok := compactContextValue(t, prompt, "trustedEnv")
+		if !ok {
+			t.Fatalf("%s prompt has no trustedEnv", label)
+		}
+		if strings.Contains(trustedEnv, `"PATH"`) || strings.Contains(trustedEnv, "/tmp/hijack") {
+			t.Fatalf("%s prompt still carries PATH: %s", label, trustedEnv)
+		}
+		if !strings.Contains(trustedEnv, `"HOME"`) {
+			t.Fatalf("%s prompt lost the remaining environment: %s", label, trustedEnv)
+		}
+	}
+	if firstDecision.RequestFingerprint == secondDecision.RequestFingerprint {
+		t.Fatal("PATH no longer binds the fingerprint; only the prompt copy may be trimmed")
+	}
+}
+
+func TestAssessorPromptOmitsRepeatedScriptContentAndLocalDigests(t *testing.T) {
+	command := "python3 - <<'PY'\nprint('duplicated')\nPY\n"
+	_, prompt := captureCompactPrompt(t, assessorRequest(t, command))
+	if len(prompt.Scripts) != 1 {
+		t.Fatalf("scripts = %#v, want the heredoc evidence", prompt.Scripts)
+	}
+	script := prompt.Scripts[0]
+	if script.Kind != "heredoc" || script.Status != "complete" || script.Interpreter != "python3" {
+		t.Fatalf("script metadata = %#v, want complete heredoc evidence", script)
+	}
+	if script.Content != "" {
+		t.Fatalf("prompt repeated script content already present in the command: %q", script.Content)
+	}
+	if script.Digest != "" {
+		t.Fatalf("prompt carried a local digest: %q", script.Digest)
+	}
+
+	workspace := t.TempDir()
+	entrypoint := filepath.Join(workspace, "main.py")
+	source := "print('from file')\n"
+	if err := os.WriteFile(entrypoint, []byte(source), 0o600); err != nil {
+		t.Fatalf("write entrypoint: %v", err)
+	}
+	_, filePrompt := captureCompactPrompt(t, reviewer.Request{
+		SchemaVersion: reviewer.RequestSchemaVersion,
+		Command:       "python3 " + entrypoint,
+		CWD:           workspace,
+		WorkspaceRoot: &workspace,
+		Env:           map[string]string{"HOME": workspace, "PWD": workspace},
+		Session:       reviewer.Session{ID: "session-1", Host: "test"},
+	})
+	if len(filePrompt.Scripts) != 1 || filePrompt.Scripts[0].Content != source {
+		t.Fatalf("file script content was dropped: %#v", filePrompt.Scripts)
+	}
+	if filePrompt.Scripts[0].Digest != "" {
+		t.Fatalf("file script digest leaked into the prompt: %#v", filePrompt.Scripts[0])
+	}
+}
+
+func TestAssessorPromptStatesWorkspaceRelation(t *testing.T) {
+	workspace := t.TempDir()
+	request := assessorRequest(t, "custom-cleanup")
+	request.WorkspaceRoot = &workspace
+
+	request.CWD = t.TempDir()
+	_, outside := captureCompactPrompt(t, request)
+	if got := string(outside.ContextCapsule["outsideWorkspace"]); got != "true" {
+		t.Fatalf("outsideWorkspace = %s, want true for a directory outside the workspace", got)
+	}
+
+	request.CWD = workspace
+	_, inside := captureCompactPrompt(t, request)
+	if got := string(inside.ContextCapsule["outsideWorkspace"]); got != "false" {
+		t.Fatalf("outsideWorkspace = %s, want false inside the workspace", got)
+	}
+
+	request.WorkspaceRoot = nil
+	_, unknown := captureCompactPrompt(t, request)
+	if got, ok := unknown.ContextCapsule["outsideWorkspace"]; ok {
+		t.Fatalf("outsideWorkspace = %s, want it omitted without a workspace root", got)
+	}
+}
+
+func compactContextValue(t *testing.T, prompt, key string) (string, bool) {
+	t.Helper()
+	var decoded compactPrompt
+	if err := json.Unmarshal([]byte(prompt), &decoded); err != nil {
+		t.Fatalf("decode model prompt: %v", err)
+	}
+	raw, ok := decoded.ContextCapsule[key]
+	if !ok {
+		return "", false
+	}
+	return string(raw), true
 }
