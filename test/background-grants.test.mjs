@@ -8,7 +8,7 @@ let evidence;
 before(async () => {
   evidence = await runSeam({
     backgroundGrants: true,
-    expectedVersion: process.env.GATE_PROBE_VERSION ?? "2.0.22",
+    minimumVersion: process.env.GATE_PROBE_VERSION ?? "2.0.22",
   });
 });
 

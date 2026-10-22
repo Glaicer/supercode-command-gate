@@ -5,7 +5,7 @@ import { runSeam } from "./seam-driver.mjs";
 test("blocked operational outcomes create scoped episodes with component recovery", async () => {
   const evidence = await runSeam({
     unavailableAlerts: true,
-    expectedVersion: process.env.GATE_PROBE_VERSION ?? "2.0.22",
+    minimumVersion: process.env.GATE_PROBE_VERSION ?? "2.0.22",
   });
   const results = evidence.unavailable.cases;
   const assessor = results.find((item) => item.name === "assessor-outages");
@@ -53,7 +53,7 @@ test("real TUI displays operational alert and dismisses without native execution
   const evidence = await runSeam({
     unavailableAlerts: true,
     tuiUnavailable: true,
-    expectedVersion: process.env.GATE_PROBE_VERSION ?? "2.0.22",
+    minimumVersion: process.env.GATE_PROBE_VERSION ?? "2.0.22",
   });
   const result = evidence.unavailable.cases[0];
   assert.equal(result.marker, false);

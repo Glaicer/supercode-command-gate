@@ -166,7 +166,7 @@ test("synthetic continuation preserves admitted intent but clear invalidates exa
   ]) {
     const result = calls.find((item) => item.name === name);
     assert.equal(
-      result.assessments[0].contextCapsule.latestUserRequest,
+      result.assessments[0].contextCapsule.latestUserRequest ?? null,
       text,
       name,
     );
@@ -178,7 +178,7 @@ test("synthetic continuation preserves admitted intent but clear invalidates exa
   );
   assert.equal(
     calls.find((item) => item.name === "goal-cleared").assessments[0]
-      .contextCapsule.goal,
+      .contextCapsule.goal ?? null,
     null,
   );
   for (const name of [

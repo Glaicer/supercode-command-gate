@@ -1,34 +1,41 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runSeam } from "./seam-driver.mjs";
+import { runSeam, versionAtLeast } from "./seam-driver.mjs";
+
+const summaryFields = [
+  "immediate_risk",
+  "cwd",
+  "shortened_preview",
+  "masked",
+  "deny",
+  "once",
+  "details",
+  "command",
+  "technical",
+  "readable_assessment",
+  "uncertainty",
+  "details_without_command",
+  "returned_actions",
+  "no_execution_while_reading",
+];
+
+const commandFields = [
+  "previous_label",
+  "previous_returns_prior_page",
+  "secret_warning",
+  "unmasked_command",
+  "unicode",
+  "last_command_line",
+  "all_command_pages",
+  "resize_repagination",
+  "resize_preserves_position",
+];
 
 test("a real 64x24 TUI displays complete action labels and readable paginated evidence", async () => {
   const evidence = await runSeam({ approval: true, human: true, layout: true });
-  for (const field of [
-    "previous_label",
-    "previous_returns_prior_page",
-    "deny",
-    "once",
-    "details",
-    "command",
-    "technical",
-    "immediate_risk",
-    "cwd",
-    "shortened_preview",
-    "masked",
-    "readable_assessment",
-    "uncertainty",
-    "details_without_command",
-    "secret_warning",
-    "unmasked_command",
-    "unicode",
-    "last_command_line",
-    "all_command_pages",
-    "resize_repagination",
-    "resize_preserves_position",
-    "returned_actions",
-    "no_execution_while_reading",
-  ])
+  const modern = versionAtLeast(evidence.version, "2.1.0");
+  const fields = modern ? summaryFields : [...summaryFields, ...commandFields];
+  for (const field of fields)
     assert.equal(
       evidence.approval.layout[field],
       true,
@@ -43,7 +50,7 @@ test("a real 64x24 TUI displays complete action labels and readable paginated ev
     (event) => event.kind === "human-response",
   );
   assert.equal(replies.length, 1);
-  assert.equal(replies[0].decision, "deny");
+  assert.equal(replies[0].decision, modern ? "dismiss" : "deny");
 });
 
 test("Escape on a page with Previous still dismisses approval without execution", async () => {

@@ -22,7 +22,7 @@ test("deadline and session interruption terminate a SIGTERM-resistant Reviewer a
     );
     if (result.name === "fixture-timeout") {
       assert.equal(result.finished, true);
-      assert.match(result.toolResult, /timeout.*command was not executed/i);
+      assert.match(result.toolResult, /timed? out.*command was not executed/i);
     }
   }
 });

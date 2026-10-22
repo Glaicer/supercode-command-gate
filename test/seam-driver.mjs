@@ -44,13 +44,29 @@ export const COMPOUND_ALLOW_COMMAND =
 
 export const INVOCATION_COMMAND = "touch invocation.marker";
 
+export function versionAtLeast(version, minimum) {
+  const parts = (value) =>
+    value
+      .replace(/^v/, "")
+      .split(".")
+      .map((part) => Number.parseInt(part, 10) || 0);
+  const actual = parts(version);
+  const floor = parts(minimum);
+  for (let index = 0; index < Math.max(actual.length, floor.length); index++) {
+    const left = actual[index] ?? 0;
+    const right = floor[index] ?? 0;
+    if (left !== right) return left > right;
+  }
+  return true;
+}
+
 export async function runSeam(options = {}) {
   const version = (await exec(opencode, ["--version"])).stdout
     .trim()
     .replace(/^opencode v/, "");
-  const expectedVersion = options.expectedVersion ?? "2.0.22";
-  if (version !== expectedVersion)
-    throw Error(`Expected OpenCode ${expectedVersion}, got ${version}`);
+  const minimumVersion = options.minimumVersion ?? "2.0.22";
+  if (!versionAtLeast(version, minimumVersion))
+    throw Error(`Expected OpenCode ${minimumVersion} or newer, got ${version}`);
   const root =
     process.env.SEAM_ROOT ??
     (await mkdtemp("/tmp/opencode/command-gate-seam-"));
@@ -222,7 +238,7 @@ export async function runSeam(options = {}) {
   const baseURL = `http://127.0.0.1:${provider.address().port}/v1`;
 
   let packed = null;
-  const boot = (config) => bootHost({ ...config, packed });
+  const boot = (config) => bootHost({ ...config, packed, version });
   const evidence = {
     version,
     root,
@@ -1740,7 +1756,7 @@ async function bootHost(config) {
           ]);
         if (config.layout)
           layoutCapture = exec("python3", [
-            `${here}/tui-layout.py`,
+            `${here}/${versionAtLeast(config.version, "2.1.0") ? "tui-layout-modern.py" : "tui-layout.py"}`,
             `${root}/launch-tui.sh`,
             `${root}/tui-layout.json`,
             ...(config.layoutDismiss ? ["dismiss"] : []),

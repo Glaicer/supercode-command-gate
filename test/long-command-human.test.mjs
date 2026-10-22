@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runSeam } from "./seam-driver.mjs";
+import { runSeam, versionAtLeast } from "./seam-driver.mjs";
 
 test(
   "human inspects every long-command page then explicitly approves or denies native execution",
@@ -16,7 +16,10 @@ test(
       human: true,
       longHuman: true,
     });
-    assert.equal(evidence.version, "2.0.22");
+    assert.ok(
+      versionAtLeast(evidence.version, "2.0.22"),
+      `expected OpenCode 2.0.22 or newer, got ${evidence.version}`,
+    );
     assert.equal(evidence.approval.inventoryOK, true);
     assert.equal(evidence.approval.status.settings.approvalMode, "interactive");
     assert.ok(evidence.approval.installation);
