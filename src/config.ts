@@ -98,7 +98,8 @@ export function resolveConfig(
     timeoutMs,
     approvalTimeoutMs,
     approvalMode: approvalMode === "interactive" ? "interactive" : "never-ask",
-    allowBackground: options.allowBackground === true,
+    allowBackground:
+      options.allowBackground === undefined || options.allowBackground === true,
     commandRewriter: commandRewriter === "rtk" ? "rtk" : "none",
     rewriterPath: rewriterPath || "rtk",
     onReviewerFailure:

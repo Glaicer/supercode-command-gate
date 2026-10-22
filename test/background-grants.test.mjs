@@ -220,7 +220,7 @@ test("passthrough: a Reviewer failure on a background invocation executes unrevi
   );
 });
 
-test("default: background stays an explicit coverage refusal before any review", () => {
+test("allowBackground: false keeps background an explicit coverage refusal before any review", () => {
   const boot = evidence.backgroundDefault;
   assert.equal(boot.inventoryOK, true);
   const result = find(boot, "bg-default-reject");

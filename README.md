@@ -66,9 +66,9 @@ will not contain a deliberately malicious agent, it doesn't audit every file
 or dependency a command may touch, and it doesn't sandbox execution. For real
 isolation, pair it with a sandbox such as bubblewrap.
 
-Background invocations are refused by default. With `allowBackground` on, they
-are reviewed like any other command, but the Gate does not contain, supervise
-or clean up background processes once the host starts them.
+Background invocations are reviewed like any other command by default. Set
+`allowBackground: false` to refuse them upfront; either way the Gate does not
+contain, supervise or clean up background processes once the host starts them.
 
 ## Installation
 
@@ -159,7 +159,7 @@ reviewer in its own TOML file.
 | `approvalTimeoutMs` | `600000`        | How long the approval dialog waits for your answer.                                            |
 | `timeoutMs`         | `5500`          | Deadline for one review.                                                                       |
 | `onReviewerFailure` | `deny`          | If the reviewer itself fails: `deny`, or let the command through unreviewed (`passthrough`).   |
-| `allowBackground`   | `false`         | Review invocations with `background: true` instead of refusing them upfront.                   |
+| `allowBackground`   | `true`          | Review invocations with `background: true`; set `false` to refuse them upfront.                |
 | `tools`             | `bash`, `shell` | Which shell tools to intercept.                                                                |
 | `commandRewriter`   | `none`          | `rtk` rewrites commands through `rtk` (path in `rewriterPath`) before review.                  |
 | `enabled`           | `true`          | Set `false` to keep the plugin installed but off.                                              |

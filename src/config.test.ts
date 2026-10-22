@@ -141,8 +141,8 @@ test("enabled defaults to true and only boolean false disables the gate", () => 
   }
 });
 
-test("allowBackground defaults to false and only an explicit boolean opts in", () => {
-  assert.equal(resolveConfig({}, {}).allowBackground, false);
+test("allowBackground defaults to true and only an explicit boolean false opts out", () => {
+  assert.equal(resolveConfig({}, {}).allowBackground, true);
   assert.equal(
     resolveConfig({ allowBackground: false }, {}).allowBackground,
     false,
@@ -151,7 +151,7 @@ test("allowBackground defaults to false and only an explicit boolean opts in", (
     resolveConfig({ allowBackground: true }, {}).allowBackground,
     true,
   );
-  assert.equal(resolveConfig({ allowBackground: true }, {}).configError, null);
+  assert.equal(resolveConfig({ allowBackground: false }, {}).configError, null);
   for (const allowBackground of ["true", 1, null, {}]) {
     const config = resolveConfig({ allowBackground }, {});
     assert.equal(

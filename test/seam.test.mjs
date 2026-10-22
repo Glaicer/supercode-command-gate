@@ -242,8 +242,24 @@ test("default never-ask maps Reviewer ask to an immediate policy denial without 
   assert.equal(denial.source, "assessor");
 });
 
-test("default-mode background and non-Bash invocations refuse explicitly", () => {
-  const background = find(evidence.main, "background-reject");
+test("background invocations are reviewed by default and run in the host background", () => {
+  const background = find(evidence.main, "background-default");
+  assert.equal(
+    background.marker,
+    true,
+    "the reviewed background command really executes",
+  );
+  assert.equal(background.finished, true);
+  assert.match(background.toolResult, /Command moved to the background/);
+  assert.equal(
+    reviewOf(background, "review-allow").background,
+    true,
+    "the review-allow event logs the background fact",
+  );
+});
+
+test("allowBackground: false refuses background invocations before any review", () => {
+  const background = find(evidence.backgroundDisabled, "background-refuse");
   assert.equal(background.marker, false);
   assert.match(background.toolResult, /background execution is outside/i);
   assert.match(background.toolResult, /command was not executed/i);
@@ -253,7 +269,9 @@ test("default-mode background and non-Bash invocations refuse explicitly", () =>
     "background refuses before any review",
   );
   assert.equal(background.finished, true);
+});
 
+test("non-Bash invocations refuse explicitly", () => {
   const sh = find(evidence.nonBash, "shcase");
   assert.equal(sh.marker, false);
   assert.match(sh.toolResult, /unsupported shell/i);

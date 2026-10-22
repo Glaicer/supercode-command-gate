@@ -21,7 +21,7 @@ test("late tool input edits are reviewed at actual shell creation, not authorize
   );
 });
 
-test("native background edited after tool-before refusal still cannot start", () => {
+test("native background edited before the Gate's hook is still refused when allowBackground is false", () => {
   const result = evidence.integrity.cases.find(
     (item) => item.name === "late-background",
   );

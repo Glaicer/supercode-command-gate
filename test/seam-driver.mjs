@@ -290,6 +290,7 @@ export async function runSeam(options = {}) {
         modelRequests,
         cases,
         integrity: true,
+        pluginOptions: { allowBackground: false },
       });
       cases = [
         {
@@ -1022,6 +1023,7 @@ exec '${aar}' "$@"
         aar,
         modelRequests,
         cases,
+        pluginOptions: { allowBackground: false },
       });
       evidence.assessorRequests = assessorRequests.map((body) =>
         JSON.stringify(body.messages),
@@ -1137,6 +1139,29 @@ exec '${aar}' "$@"
       modelRequests,
       cases,
       pluginOptions: { allowBackground: true },
+    });
+    cases = [
+      {
+        name: "background-refuse",
+        call: {
+          tool: "shell",
+          arguments: {
+            command: "touch background-refuse.marker",
+            background: true,
+          },
+        },
+        marker: "background-refuse.marker",
+        expectMarker: false,
+      },
+    ];
+    evidence.backgroundDisabled = await boot({
+      name: "background-disabled",
+      root: `${root}/background-disabled`,
+      baseURL,
+      aar,
+      modelRequests,
+      cases,
+      pluginOptions: { allowBackground: false },
     });
     evidence.assessorRequests = assessorRequests.map((body) =>
       JSON.stringify(body.messages),
@@ -1267,13 +1292,16 @@ function mainCases(root) {
       expectMarker: false,
     },
     {
-      name: "background-reject",
+      name: "background-default",
       call: {
         tool: "shell",
-        arguments: { command: "touch background.marker", background: true },
+        arguments: {
+          command: "touch background-default.marker",
+          background: true,
+        },
       },
-      marker: "background.marker",
-      expectMarker: false,
+      marker: "background-default.marker",
+      expectMarker: true,
     },
     {
       name: "child-allow",
