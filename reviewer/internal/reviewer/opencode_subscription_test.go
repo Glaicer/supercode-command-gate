@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/supercode/auto-approval-reviewer/internal/reviewer"
+	"github.com/Glaicer/supercode-command-gate/reviewer/internal/reviewer"
 )
 
 func openCodeAuthFixture(t *testing.T, expiry time.Time, payloadOverride string) string {

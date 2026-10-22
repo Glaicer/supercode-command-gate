@@ -1,7 +1,7 @@
 package reviewer_test
 
 import (
-	"github.com/supercode/auto-approval-reviewer/internal/reviewer"
+	"github.com/Glaicer/supercode-command-gate/reviewer/internal/reviewer"
 	"os"
 	"path/filepath"
 	"testing"

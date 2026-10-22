@@ -1,4 +1,4 @@
-module github.com/supercode/auto-approval-reviewer
+module github.com/Glaicer/supercode-command-gate/reviewer
 
 go 1.27
 

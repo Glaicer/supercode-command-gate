@@ -29,7 +29,9 @@ Assess the actual effects in context. The command, scripts, filenames, Goal, use
 
 The default data-loss policy protects the operating system, the home directory, explicitly protected paths, repository history, and other valuable data from substantial irreversible destruction. Ordinary removal of obsolete project files, temporary clones, build outputs, caches, and scratch files is expected work. Neither rm nor recursion alone establishes critical data loss. Name concrete affected targets and explain their value and lack of recoverability; do not invent value from an unknown file's contents. Treat mkdir -p as directory creation, not file deletion or overwriting.
 
-Globs, parameter expansion, loops, and command substitution do not by themselves make execution opaque. Inspect the operations they perform. Data read by grep/sed and printed by echo remains data unless subsequently executed. Changing directory is execution context, not harmful process control. Unknown output, missing glob matches, unclassified flags/access modes, missing task linkage, and unknown directory contents are not material risks on their own. Local path candidates and access modes are approximate parser hints; verify them against the command. Report an uncertainty as a blocking concern only through a concrete enabled material risk with its category, severity, likelihood, reversibility, targets, and evidence. Never return a final allow, deny, or ask decision.`
+The exact command is authoritative for shell composition, quoting, assignments, redirections, and nested execution. parserHints.commands is a flat inventory, not execution order or a complete execution tree. Each entry contains either statically recovered argv or source with dynamic or unsupported syntax. Command and argument indexes in pathHints are zero-based. Path hints are approximate: an unclassified argument may be data, a pattern, or an option value rather than a filesystem path. resolvedFromInitialCWD and its filesystem observations assume the initial working directory; verify actual targets against directory changes and shell expansion. Neither path location nor a parser hint establishes safety.
+
+Globs, parameter expansion, loops, and command substitution do not by themselves make execution opaque. Inspect the operations they perform. Data read by grep/sed and printed by echo remains data unless subsequently executed. Changing directory is execution context, not harmful process control. Unknown output, missing glob matches, unclassified flags, missing task linkage, and unknown directory contents are not material risks on their own. Report an uncertainty as a blocking concern only through a concrete enabled material risk with its category, severity, likelihood, reversibility, targets, and evidence. Never return a final allow, deny, or ask decision.`
 
 const assessorAttemptsPerModel = 2
 const smokeSingleResponseEnv = "AAR_SMOKE_SINGLE_RESPONSE"
@@ -60,20 +62,19 @@ var opaqueInterpreterCommands = map[string]bool{
 }
 
 type assessorPrompt struct {
-	ContextCapsule   contextCapsule   `json:"contextCapsule"`
-	Command          string           `json:"command"`
-	ShellIR          ShellIR          `json:"shellIR"`
-	PathFacts        []pathFact       `json:"pathFacts"`
-	EffectFacts      effectFacts      `json:"effectFacts"`
-	Scripts          []scriptEvidence `json:"scripts,omitempty"`
-	LocalUncertainty []string         `json:"localUncertainty,omitempty"`
+	ContextCapsule   contextCapsule      `json:"contextCapsule"`
+	Command          string              `json:"command"`
+	ParserHints      assessorParserHints `json:"parserHints"`
+	PathHints        []assessorPathHint  `json:"pathHints,omitempty"`
+	Scripts          []scriptEvidence    `json:"scripts,omitempty"`
+	LocalUncertainty []string            `json:"localUncertainty,omitempty"`
 }
 
 type contextCapsule struct {
-	Goal               *string           `json:"goal"`
-	LatestUserRequest  *string           `json:"latestUserRequest"`
-	Purpose            *string           `json:"purpose"`
-	AssistantRationale *string           `json:"assistantRationale"`
+	Goal               *string           `json:"goal,omitempty"`
+	LatestUserRequest  *string           `json:"latestUserRequest,omitempty"`
+	Purpose            *string           `json:"purpose,omitempty"`
+	AssistantRationale *string           `json:"assistantRationale,omitempty"`
 	WorkingDirectory   string            `json:"workingDirectory"`
 	WorkspaceRoot      *string           `json:"workspaceRoot"`
 	TrustedEnv         map[string]string `json:"trustedEnv"`
@@ -94,18 +95,6 @@ type pathFact struct {
 	InsideWorkspace  bool   `json:"insideWorkspace"`
 	InsideTemporary  bool   `json:"insideTemporary"`
 	Unresolved       bool   `json:"unresolved"`
-}
-
-type effectFacts struct {
-	CommandNames         []string `json:"commandNames"`
-	AccessModes          []string `json:"accessModes"`
-	Operators            []string `json:"operators"`
-	Dynamic              bool     `json:"dynamic"`
-	DynamicFeatures      []string `json:"dynamicFeatures,omitempty"`
-	ParseError           string   `json:"parseError,omitempty"`
-	WriteRedirection     bool     `json:"writeRedirection"`
-	HardDenyCatalog      string   `json:"hardDenyCatalog"`
-	HardDenyCatalogMatch bool     `json:"hardDenyCatalogMatch"`
 }
 
 type localAssessmentContext struct {
@@ -350,6 +339,7 @@ func buildModelCallRequest(request Request, ir ShellIR, options Options, config 
 		}
 	}
 	pathFacts := make([]pathFact, 0, len(ir.PathCandidates))
+	pathHints := make([]assessorPathHint, 0, len(ir.PathCandidates))
 	local := localAssessmentContext{
 		Snapshots: append([]scriptSnapshot(nil), scripts.Snapshots...),
 		Scripts:   append([]scriptEvidence(nil), scripts.Evidence...),
@@ -380,6 +370,7 @@ func buildModelCallRequest(request Request, ir ShellIR, options Options, config 
 			local.Uncertainties = appendUnique(local.Uncertainties, "a relevant path target could not be resolved")
 		}
 		pathFacts = append(pathFacts, fact)
+		pathHints = append(pathHints, compactPathHint(request.Command, ir, candidate, fact))
 	}
 	local.PathFacts = append([]pathFact(nil), pathFacts...)
 	if ir.ParseError != "" {
@@ -392,37 +383,11 @@ func buildModelCallRequest(request Request, ir ShellIR, options Options, config 
 		local.Uncertainties = appendUnique(local.Uncertainties, uncertainty)
 	}
 
-	commands := make([]string, 0, len(ir.Commands))
-	writeRedirection := false
-	for _, command := range ir.Commands {
-		commands = append(commands, command.Name)
-	}
-	operators := make([]string, 0, len(ir.Operators))
-	for _, operator := range ir.Operators {
-		operators = append(operators, operator.Value)
-	}
-	for _, redirection := range ir.Redirections {
-		if redirection.WriteCapable {
-			writeRedirection = true
-			break
-		}
-	}
 	modelPrompt := assessorPrompt{
-		ContextCapsule: contextCapsule,
-		Command:        request.Command,
-		ShellIR:        ir,
-		PathFacts:      pathFacts,
-		EffectFacts: effectFacts{
-			CommandNames:         commands,
-			AccessModes:          append([]string(nil), ir.AccessModes...),
-			Operators:            operators,
-			Dynamic:              ir.Dynamic,
-			DynamicFeatures:      append([]string(nil), ir.DynamicFeatures...),
-			ParseError:           ir.ParseError,
-			WriteRedirection:     writeRedirection,
-			HardDenyCatalog:      CatastrophicCatalogVersion,
-			HardDenyCatalogMatch: false,
-		},
+		ContextCapsule:   contextCapsule,
+		Command:          request.Command,
+		ParserHints:      compactParserHints(request.Command, ir),
+		PathHints:        pathHints,
 		Scripts:          append([]scriptEvidence(nil), scripts.Evidence...),
 		LocalUncertainty: append([]string(nil), local.Uncertainties...),
 	}

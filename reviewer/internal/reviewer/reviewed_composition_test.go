@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/supercode/auto-approval-reviewer/internal/reviewer"
+	"github.com/Glaicer/supercode-command-gate/reviewer/internal/reviewer"
 )
 
 func reviewedChainFixture(t *testing.T) (reviewer.Request, reviewer.Options, *fakeModelCall) {

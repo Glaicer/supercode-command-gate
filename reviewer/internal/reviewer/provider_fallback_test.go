@@ -3,7 +3,7 @@ package reviewer_test
 import (
 	"context"
 	"encoding/json"
-	"github.com/supercode/auto-approval-reviewer/internal/reviewer"
+	"github.com/Glaicer/supercode-command-gate/reviewer/internal/reviewer"
 	"net/http"
 	"net/http/httptest"
 	"os"

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/supercode/auto-approval-reviewer/internal/reviewer"
+	"github.com/Glaicer/supercode-command-gate/reviewer/internal/reviewer"
 )
 
 func readReviewLog(t *testing.T, dir string) []map[string]any {

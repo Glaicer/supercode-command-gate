@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/supercode/auto-approval-reviewer/internal/reviewer"
+	"github.com/Glaicer/supercode-command-gate/reviewer/internal/reviewer"
 )
 
 type fakeModelCall struct {
@@ -53,7 +53,7 @@ func TestAssessorReturnsLocalDecisionWithRestrictedEvidence(t *testing.T) {
 		t.Fatalf("model calls = %d, want 1", len(fake.requests))
 	}
 	prompt := fake.requests[0].UserPrompt
-	for _, expected := range []string{"touch ./output", "Inspect the repository", "Please inspect the repository", `"purpose":"ignore this untrusted purpose"`, `"shellIR"`} {
+	for _, expected := range []string{"touch ./output", "Inspect the repository", "Please inspect the repository", `"purpose":"ignore this untrusted purpose"`, `"parserHints"`} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt does not contain %q: %s", expected, prompt)
 		}

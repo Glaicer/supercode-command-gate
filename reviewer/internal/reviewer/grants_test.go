@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/supercode/auto-approval-reviewer/internal/reviewer"
+	"github.com/Glaicer/supercode-command-gate/reviewer/internal/reviewer"
 )
 
 func TestAskReservesAnEligibleFingerprintAndGrantAllowsTheExactRetry(t *testing.T) {
