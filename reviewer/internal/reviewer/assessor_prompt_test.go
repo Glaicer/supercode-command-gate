@@ -173,6 +173,71 @@ func TestCompactAssessorPromptOmitsResolutionWhenDirectoryIsUnknown(t *testing.T
 	}
 }
 
+func TestCompactAssessorPromptOmitsResolutionForCDPathRelativeChange(t *testing.T) {
+	request := assessorRequest(t, `probe-tool && cd nested && rm ./target`)
+	if err := os.Mkdir(filepath.Join(request.CWD, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, prompt := captureCompactPrompt(t, request)
+	requireResolution(t, prompt, "./target", "inferred-cd", filepath.Join(request.CWD, "nested", "target"))
+
+	request = assessorRequest(t, `probe-tool && cd nested && rm ./target`)
+	if err := os.Mkdir(filepath.Join(request.CWD, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	request.Env["CDPATH"] = filepath.Join(t.TempDir(), "other")
+	call, prompt := captureCompactPrompt(t, request)
+	requireNoPathResolution(t, call.UserPrompt, prompt)
+}
+
+func TestCompactAssessorPromptOmitsResolutionAcrossAlternativeDirectories(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+	}{
+		{name: "two cds", command: `cd ./first || cd ./second; rm ./target`},
+		{name: "cd or probe", command: `cd ./first || probe-tool; rm ./target`},
+		{name: "dynamic cd or cd", command: `cd "$DIR" || cd ./second; rm ./target`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := assessorRequest(t, tc.command)
+			for _, directory := range []string{"first", "second"} {
+				if err := os.Mkdir(filepath.Join(request.CWD, directory), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			call, prompt := captureCompactPrompt(t, request)
+			requireNoPathResolution(t, call.UserPrompt, prompt)
+		})
+	}
+}
+
+func TestCompactAssessorPromptKeepsDirectoryWhenAlternativesAgree(t *testing.T) {
+	request := assessorRequest(t, `cd ./first || cd ./first; rm ./target`)
+	if err := os.Mkdir(filepath.Join(request.CWD, "first"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, prompt := captureCompactPrompt(t, request)
+	requireResolution(t, prompt, "./target", "inferred-cd", filepath.Join(request.CWD, "first", "target"))
+}
+
+func TestCompactAssessorPromptKeepsDirectoryAcrossConditionalWithoutCD(t *testing.T) {
+	request := assessorRequest(t, `if probe-tool; then rm ./inside; fi; rm ./target`)
+	_, prompt := captureCompactPrompt(t, request)
+	requireResolution(t, prompt, "./inside", "initial-cwd", filepath.Join(request.CWD, "inside"))
+	requireResolution(t, prompt, "./target", "initial-cwd", filepath.Join(request.CWD, "target"))
+}
+
+func TestCompactAssessorPromptOmitsResolutionInsideConditionalWithCD(t *testing.T) {
+	request := assessorRequest(t, `if probe-tool; then cd ./first; rm ./inside; fi; rm ./target`)
+	if err := os.Mkdir(filepath.Join(request.CWD, "first"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	call, prompt := captureCompactPrompt(t, request)
+	requireNoPathResolution(t, call.UserPrompt, prompt)
+}
+
 func TestCompactAssessorPromptKeepsParentDirectoryAcrossSubshell(t *testing.T) {
 	command := `( cd ./elsewhere ) && rm ./target`
 	request := assessorRequest(t, command)
@@ -320,6 +385,17 @@ func TestCompactAssessorPromptDistinguishesMissingAndUncheckedPaths(t *testing.T
 		requireExistence(t, prompt, "./absent", "absent")
 	})
 
+	t.Run("dangling symlink", func(t *testing.T) {
+		request := assessorRequest(t, `probe-tool && rm ./link`)
+		link := filepath.Join(request.CWD, "link")
+		if err := os.Symlink(filepath.Join(request.CWD, "missing"), link); err != nil {
+			t.Fatal(err)
+		}
+		_, prompt := captureCompactPrompt(t, request)
+		requireExistence(t, prompt, "./link", "present")
+		requireResolution(t, prompt, "./link", "initial-cwd", link)
+	})
+
 	t.Run("unchecked", func(t *testing.T) {
 		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 			t.Skip("permission-restricted directories cannot be simulated for this user")
@@ -350,6 +426,23 @@ func requireExistence(t *testing.T, prompt compactPrompt, source, want string) {
 		}
 		if hint.Resolution.Existence != want {
 			t.Fatalf("%q existence = %q, want %q", source, hint.Resolution.Existence, want)
+		}
+		return
+	}
+	t.Fatalf("no path hint for %q: %#v", source, prompt.PathHints)
+}
+
+func requireResolution(t *testing.T, prompt compactPrompt, source, wantBasis, wantPath string) {
+	t.Helper()
+	for _, hint := range prompt.PathHints {
+		if hint.Source != source {
+			continue
+		}
+		if hint.Resolution == nil {
+			t.Fatalf("%q has no resolution", source)
+		}
+		if hint.Resolution.Basis != wantBasis || hint.Resolution.ResolvedPath != wantPath {
+			t.Fatalf("%q resolution = %#v, want %s %q", source, hint.Resolution, wantBasis, wantPath)
 		}
 		return
 	}

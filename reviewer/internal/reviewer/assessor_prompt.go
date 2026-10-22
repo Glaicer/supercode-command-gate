@@ -70,20 +70,20 @@ func compactParserHints(source string, ir ShellIR) assessorParserHints {
 // pathCWDBySpan maps each path candidate to the directory it is evaluated in.
 // It tracks static cd commands in execution order and never guesses after a
 // directory change it cannot follow.
-func pathCWDBySpan(ir ShellIR, initial string) map[IRSpan]pathCWD {
+func pathCWDBySpan(ir ShellIR, initial string, env map[string]string) map[IRSpan]pathCWD {
 	contexts := map[IRSpan]pathCWD{}
-	walkPathContexts(ir, ir.Executions, pathCWD{cwd: initial, known: true}, contexts)
+	walkPathContexts(ir, ir.Executions, pathCWD{cwd: initial, known: true}, env, contexts)
 	return contexts
 }
 
-func walkPathContexts(ir ShellIR, executions []IRExecution, state pathCWD, contexts map[IRSpan]pathCWD) pathCWD {
+func walkPathContexts(ir ShellIR, executions []IRExecution, state pathCWD, env map[string]string, contexts map[IRSpan]pathCWD) pathCWD {
 	for _, execution := range executions {
-		state = walkPathContext(ir, execution, state, contexts)
+		state = walkPathContext(ir, execution, state, env, contexts)
 	}
 	return state
 }
 
-func walkPathContext(ir ShellIR, execution IRExecution, state pathCWD, contexts map[IRSpan]pathCWD) pathCWD {
+func walkPathContext(ir ShellIR, execution IRExecution, state pathCWD, env map[string]string, contexts map[IRSpan]pathCWD) pathCWD {
 	for _, index := range execution.RedirectionIndexes {
 		if index < 0 || index >= len(ir.Redirections) {
 			continue
@@ -104,37 +104,94 @@ func walkPathContext(ir ShellIR, execution IRExecution, state pathCWD, contexts 
 			contexts[argument.Span] = state
 		}
 		if command.Name == "cd" {
-			return cdPathContext(command, state)
+			return cdPathContext(command, state, env)
 		}
 		return state
 	case "pipeline":
 		// Pipeline stages run in subshells; a cd there cannot change the parent.
 		for _, child := range execution.Children {
-			walkPathContext(ir, child, state, contexts)
+			walkPathContext(ir, child, state, env, contexts)
 		}
 		return state
-	case "and", "or":
+	case "and":
 		if len(execution.Children) != 2 {
 			return pathCWD{}
 		}
-		left := walkPathContext(ir, execution.Children[0], state, contexts)
-		return walkPathContext(ir, execution.Children[1], left, contexts)
-	case "block":
-		return walkPathContexts(ir, execution.Children, state, contexts)
-	case "subshell":
-		walkPathContexts(ir, execution.Children, state, contexts)
-		return state
-	default:
-		// Conditional or unsupported constructs may or may not change the
-		// directory, so later commands have no reliable execution context.
-		for _, child := range execution.Children {
-			walkPathContext(ir, child, state, contexts)
+		left := walkPathContext(ir, execution.Children[0], state, env, contexts)
+		return walkPathContext(ir, execution.Children[1], left, env, contexts)
+	case "or":
+		if len(execution.Children) != 2 {
+			return pathCWD{}
+		}
+		left := walkPathContext(ir, execution.Children[0], state, env, contexts)
+		// The right branch runs only when the left one failed, so it still
+		// starts from the incoming directory.
+		right := walkPathContext(ir, execution.Children[1], state, env, contexts)
+		if left.sameDirectory(right) {
+			return left
 		}
 		return pathCWD{}
+	case "block":
+		return walkPathContexts(ir, execution.Children, state, env, contexts)
+	case "subshell":
+		walkPathContexts(ir, execution.Children, state, env, contexts)
+		return state
+	default:
+		// Conditional and loop constructs carry no child executions; their
+		// nested commands remain in ir.Commands. Later commands keep the prior
+		// directory only when nothing inside the construct can change it.
+		if !directoryUnchanged(ir, execution.Span) {
+			for _, child := range execution.Children {
+				walkPathContext(ir, child, state, env, contexts)
+			}
+			return pathCWD{}
+		}
+		for _, command := range ir.Commands {
+			if !spanContains(execution.Span, command.Span) {
+				continue
+			}
+			for _, argument := range command.ArgumentFacts {
+				contexts[argument.Span] = state
+			}
+		}
+		for _, redirection := range ir.Redirections {
+			if !redirection.HereDocument && spanContains(execution.Span, redirection.Span) {
+				contexts[redirection.TargetSpan] = state
+			}
+		}
+		for _, child := range execution.Children {
+			walkPathContext(ir, child, state, env, contexts)
+		}
+		return state
 	}
 }
 
-func cdPathContext(command IRCommand, state pathCWD) pathCWD {
+func (state pathCWD) sameDirectory(other pathCWD) bool {
+	return state.known == other.known && state.inferred == other.inferred && state.cwd == other.cwd
+}
+
+// directoryUnchanged reports whether every command inside the construct is
+// static and cannot change the working directory.
+func directoryUnchanged(ir ShellIR, span IRSpan) bool {
+	if span.Start >= span.End {
+		return false
+	}
+	for _, command := range ir.Commands {
+		if !spanContains(span, command.Span) {
+			continue
+		}
+		if command.Name == "cd" || !command.Static {
+			return false
+		}
+	}
+	return true
+}
+
+func spanContains(outer, inner IRSpan) bool {
+	return outer.Start < outer.End && outer.Start <= inner.Start && inner.End <= outer.End
+}
+
+func cdPathContext(command IRCommand, state pathCWD, env map[string]string) pathCWD {
 	if !state.known || !command.Static {
 		return pathCWD{}
 	}
@@ -143,6 +200,9 @@ func cdPathContext(command IRCommand, state pathCWD) pathCWD {
 		return pathCWD{}
 	}
 	target := operands[0]
+	if cdMayUseCDPath(target, env) {
+		return pathCWD{}
+	}
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(state.cwd, target)
 	}
@@ -162,6 +222,17 @@ func cdPathContext(command IRCommand, state pathCWD) pathCWD {
 		return pathCWD{}
 	}
 	return pathCWD{cwd: resolved, known: true, inferred: true}
+}
+
+// cdMayUseCDPath reports whether a relative cd operand without an explicit
+// ./ or ../ prefix can resolve through CDPATH instead of the current
+// directory. Explicit relative paths bypass CDPATH.
+func cdMayUseCDPath(target string, env map[string]string) bool {
+	if env["CDPATH"] == "" || filepath.IsAbs(target) {
+		return false
+	}
+	relative := "." + string(filepath.Separator)
+	return !strings.HasPrefix(target, relative) && !strings.HasPrefix(target, relative+".")
 }
 
 func cdOperands(args []string) []string {
@@ -224,6 +295,9 @@ func compactPathHint(source string, ir ShellIR, candidate IRPathCandidate, conte
 	}
 	resolved, ok := evaluator.resolvePath(candidate.Value, context.cwd)
 	if !ok {
+		resolved, ok = danglingLinkPath(candidate.Value, context.cwd)
+	}
+	if !ok {
 		return hint, true
 	}
 	basis := "initial-cwd"
@@ -241,8 +315,30 @@ func compactPathHint(source string, ir ShellIR, candidate IRPathCandidate, conte
 	return hint, true
 }
 
+// danglingLinkPath locates a path whose final component is a symlink with a
+// missing target. The link itself exists, and removing or overwriting it acts
+// on the link, so its resolved parent still identifies the affected entry.
+func danglingLinkPath(value, cwd string) (string, bool) {
+	if cwd == "" || value == "" || strings.ContainsRune(value, '\x00') || strings.HasPrefix(value, "~") {
+		return "", false
+	}
+	candidate := value
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(cwd, candidate)
+	}
+	candidate = filepath.Clean(candidate)
+	if _, err := os.Lstat(candidate); err != nil {
+		return "", false
+	}
+	parent, ok := resolveExistingPrefix(filepath.Dir(candidate))
+	if !ok {
+		return "", false
+	}
+	return filepath.Join(parent, filepath.Base(candidate)), true
+}
+
 func pathExistence(path string) string {
-	_, err := os.Stat(path)
+	_, err := os.Lstat(path)
 	switch {
 	case err == nil:
 		return pathExistencePresent

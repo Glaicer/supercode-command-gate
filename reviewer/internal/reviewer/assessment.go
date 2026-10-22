@@ -342,7 +342,7 @@ func buildModelCallRequest(request Request, ir ShellIR, options Options, config 
 	}
 	pathFacts := make([]pathFact, 0, len(ir.PathCandidates))
 	pathHints := make([]assessorPathHint, 0, len(ir.PathCandidates))
-	pathContexts := pathCWDBySpan(ir, evaluator.originalCWD)
+	pathContexts := pathCWDBySpan(ir, evaluator.originalCWD, evaluator.env)
 	local := localAssessmentContext{
 		Snapshots: append([]scriptSnapshot(nil), scripts.Snapshots...),
 		Scripts:   append([]scriptEvidence(nil), scripts.Evidence...),
