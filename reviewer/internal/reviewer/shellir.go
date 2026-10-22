@@ -445,11 +445,16 @@ func (c *shellConverter) addRedirection(redirection *syntax.Redirect) int {
 	if redirection.N != nil {
 		fd = redirection.N.Value
 	}
-	outputDuplication := redirection.Op == syntax.DplOut && (fd == "" || fd == "1" || fd == "2") && (fact.value == "1" || fact.value == "2")
-	if redirection.Op == syntax.DplIn || redirection.Op == syntax.DplOut && !outputDuplication {
+	// Bare `>&word` with a non-numeric word is `&>word`: both output streams
+	// go to that file. With an explicit descriptor or a numeric word it is a
+	// descriptor duplication and never a filesystem target.
+	fileClobber := redirection.Op == syntax.DplOut && fd == "" && fact.static && !isDescriptorWord(fact.value)
+	writeCapable = writeCapable || fileClobber
+	outputDuplication := redirection.Op == syntax.DplOut && !fileClobber && (fd == "" || fd == "1" || fd == "2") && (fact.value == "1" || fact.value == "2")
+	if redirection.Op == syntax.DplIn || redirection.Op == syntax.DplOut && !outputDuplication && !fileClobber {
 		features = appendUnique(features, "file-descriptor-duplication")
 	}
-	static := fact.static && !hereDocument && (redirection.Op != syntax.DplIn && redirection.Op != syntax.DplOut || outputDuplication)
+	static := fact.static && !hereDocument && (redirection.Op != syntax.DplIn && redirection.Op != syntax.DplOut || outputDuplication || fileClobber)
 	for _, feature := range features {
 		if feature != "" {
 			c.markDynamic(feature)
@@ -738,6 +743,22 @@ func redirectionWriteCapable(operator syntax.RedirOperator) bool {
 	default:
 		return false
 	}
+}
+
+func isDescriptorWord(value string) bool {
+	if value == "-" {
+		return true
+	}
+	trimmed := strings.TrimSuffix(value, "-")
+	if trimmed == "" {
+		return false
+	}
+	for _, char := range trimmed {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func isHereDocument(operator syntax.RedirOperator) bool {

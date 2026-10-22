@@ -333,9 +333,9 @@ func TestCompactAssessorPromptKeepsKnownFileOperands(t *testing.T) {
 }
 
 func TestCompactAssessorPromptKeepsFileRedirectionsNotDescriptors(t *testing.T) {
-	command := `probe-tool < ./input > ./output 2>> ./errors 3<> ./data 2>&3 0<&4`
+	command := `probe-tool < ./input > ./output 2>> ./errors 3<> ./data >& ./combined 2>&3 0<&4`
 	_, prompt := captureCompactPrompt(t, assessorRequest(t, command))
-	wantSources := []string{"./input", "./output", "./errors", "./data"}
+	wantSources := []string{"./input", "./output", "./errors", "./data", "./combined"}
 	if len(prompt.PathHints) != len(wantSources) {
 		t.Fatalf("path hints = %#v, want file redirections without descriptor numbers", prompt.PathHints)
 	}

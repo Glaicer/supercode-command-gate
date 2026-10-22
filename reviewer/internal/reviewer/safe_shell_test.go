@@ -167,6 +167,59 @@ func TestSafeShellRedirectionOrder(t *testing.T) {
 	}
 }
 
+func TestSafeShellClobberRedirectWritesFile(t *testing.T) {
+	ir := reviewer.ParseShell(`probe-tool >&./combined`)
+	if ir.Dynamic {
+		t.Fatalf("file clobber marked the program dynamic: %#v", ir.DynamicFeatures)
+	}
+	if len(ir.Redirections) != 1 {
+		t.Fatalf("redirections = %#v", ir.Redirections)
+	}
+	redirection := ir.Redirections[0]
+	if redirection.Operator != ">&" || !redirection.Static || !redirection.WriteCapable {
+		t.Fatalf("clobber redirect = %#v", redirection)
+	}
+	if len(ir.PathCandidates) != 1 || ir.PathCandidates[0].Value != "./combined" || ir.PathCandidates[0].AccessMode != "write" {
+		t.Fatalf("candidates = %#v", ir.PathCandidates)
+	}
+}
+
+func TestSafeShellDescriptorRedirectsStayDuplications(t *testing.T) {
+	for _, command := range []string{
+		"cat source 2>&1", "cat source 1>&2", "cat source 2>&3",
+		"cat source 2>&-", "cat source 2>&1-", `cat source 1>&"$LOG"`, "cat source 1>&log",
+	} {
+		ir := reviewer.ParseShell(command)
+		for _, redirection := range ir.Redirections {
+			if redirection.WriteCapable {
+				t.Fatalf("%q marked as a file write: %#v", command, redirection)
+			}
+		}
+		for _, candidate := range ir.PathCandidates {
+			if candidate.AccessMode == "write" {
+				t.Fatalf("%q turned a descriptor into a write target: %#v", command, candidate)
+			}
+		}
+	}
+}
+
+func TestSafeShellClobberRedirectIsNotAutoAllowed(t *testing.T) {
+	for _, command := range []string{"cat source >&./target", "cat source >&target"} {
+		stateDir := t.TempDir()
+		fake := &fakeModelCall{responses: []string{`{"risks":[],"uncertainties":[]}`}}
+		decision, err := reviewer.Check(testRequest(t, command), reviewer.Options{
+			StateDir: stateDir, ModelCall: fake,
+			Config: &reviewer.Config{Assessor: reviewer.AssessorConfig{Model: "test"}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Source == reviewer.SourceAutoAllow {
+			t.Fatalf("%q auto-allowed", command)
+		}
+	}
+}
+
 func TestSafeShellPathExpansions(t *testing.T) {
 	for _, command := range []string{"cat *.md", "cat tests/*.spec.ts", "rg needle tests/*.spec.ts | head -60", "cat docs/screenshots/{1..8}.png"} {
 		t.Run(command, func(t *testing.T) {

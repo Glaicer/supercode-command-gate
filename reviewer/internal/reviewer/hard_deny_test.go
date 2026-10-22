@@ -99,6 +99,7 @@ func TestHardDenyBlocksImmutableRootMutation(t *testing.T) {
 
 	for _, command := range []string{
 		"cat source > /etc",
+		"cat source >&/etc",
 		"> /etc",
 		"truncate -s 0 /var",
 		"mv /etc /tmp/etc-backup",
@@ -115,6 +116,7 @@ func TestHardDenyBlocksRawDeviceWrites(t *testing.T) {
 
 	for _, command := range []string{
 		"cat source > /dev/sda",
+		"cat source >&/dev/sda",
 		"> /dev/sda",
 		"dd if=input of=/dev/nvme0n1",
 		"tee /dev/md0",
