@@ -57,14 +57,39 @@ func compactParserHints(source string, ir ShellIR) assessorParserHints {
 	}
 	for _, command := range ir.Commands {
 		hint := assessorCommandHint{}
-		if command.Static {
-			hint.Argv = append([]string(nil), command.Arguments...)
+		if argv, ok := commandArgv(command); ok {
+			hint.Argv = append([]string(nil), argv...)
 		} else {
 			hint.Source = sourceSpan(source, command.Span)
+			if strings.TrimSpace(hint.Source) == strings.TrimSpace(source) {
+				// The command field already carries the whole program verbatim.
+				continue
+			}
 		}
 		hints.Commands = append(hints.Commands, hint)
 	}
 	return hints
+}
+
+// commandArgv returns the exact argv of a dynamic command whose words are all
+// static. Such words are intact no matter why the command as a whole is not
+// static, except for alias expansion, which rewrites them.
+func commandArgv(command IRCommand) ([]string, bool) {
+	if command.Static {
+		return command.Arguments, true
+	}
+	if command.Name == "alias" || command.Name == "unalias" {
+		return nil, false
+	}
+	if len(command.ArgumentFacts) == 0 || len(command.Arguments) != len(command.ArgumentFacts) {
+		return nil, false
+	}
+	for _, argument := range command.ArgumentFacts {
+		if !argument.Static || argument.Value == "" {
+			return nil, false
+		}
+	}
+	return command.Arguments, true
 }
 
 // pathCWDBySpan maps each path candidate to the directory it is evaluated in.

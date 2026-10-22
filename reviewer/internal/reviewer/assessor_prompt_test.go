@@ -627,3 +627,81 @@ func compactContextValue(t *testing.T, prompt, key string) (string, bool) {
 	}
 	return string(raw), true
 }
+
+func TestCompactAssessorPromptRecoversArgvBehindEnvironmentAssignment(t *testing.T) {
+	command := "OPENBLAS_NUM_THREADS=1 PYTHONPATH=src .venv/bin/python -m model_training.checks"
+	_, prompt := captureCompactPrompt(t, assessorRequest(t, command))
+	if !prompt.ParserHints.Dynamic || !hasFeature(prompt.ParserHints.DynamicFeatures, "environment-assignment") {
+		t.Fatalf("parser hints lost the dynamic prefix: %#v", prompt.ParserHints)
+	}
+	if len(prompt.ParserHints.Commands) != 1 {
+		t.Fatalf("commands = %#v, want one entry", prompt.ParserHints.Commands)
+	}
+	hint := prompt.ParserHints.Commands[0]
+	want := []string{".venv/bin/python", "-m", "model_training.checks"}
+	if !reflect.DeepEqual(hint.Argv, want) || hint.Source != "" {
+		t.Fatalf("command = %#v, want static argv %#v instead of source", hint, want)
+	}
+}
+
+func TestCompactAssessorPromptOmitsCommandSourceThatRepeatsTheProgram(t *testing.T) {
+	command := `probe-tool "$VALUE"`
+	call, prompt := captureCompactPrompt(t, assessorRequest(t, command))
+	if len(prompt.ParserHints.Commands) != 0 || strings.Contains(call.UserPrompt, `"commands"`) {
+		t.Fatalf("commands = %#v, want the entry omitted because command already carries it", prompt.ParserHints.Commands)
+	}
+	if !prompt.ParserHints.Dynamic {
+		t.Fatal("prompt no longer marks the program dynamic")
+	}
+}
+
+func TestAssessorPromptCapsAssistantRationaleAtLineBoundary(t *testing.T) {
+	const lastLine = "the user asked for the full suite before committing"
+	build := func(tag string) reviewer.Request {
+		request := assessorRequest(t, "custom-cleanup")
+		request.Intent.AssistantRationale = strings.Repeat(tag+" unrelated deliberation about other work\n", 200) + lastLine
+		return request
+	}
+
+	firstDecision, first := checkWithPrompt(t, build("alpha"))
+	secondDecision, second := checkWithPrompt(t, build("bravo"))
+	firstRationale := rationaleText(t, first.UserPrompt)
+	secondRationale := rationaleText(t, second.UserPrompt)
+	if runes := []rune(firstRationale); len(runes) > 2000 {
+		t.Fatalf("assistantRationale = %d runes, want at most %d", len(runes), 2000)
+	}
+	if !strings.HasPrefix(firstRationale, "alpha unrelated deliberation about other work") {
+		t.Fatalf("rationale does not start at a line boundary: %q", firstRationale)
+	}
+	if !strings.HasSuffix(firstRationale, lastLine) {
+		t.Fatalf("rationale lost the recent intent: %q", firstRationale)
+	}
+	if len([]rune(firstRationale)) != len([]rune(secondRationale)) {
+		t.Fatal("the cap depends on text outside the recent tail")
+	}
+	if firstDecision.RequestFingerprint == secondDecision.RequestFingerprint {
+		t.Fatal("the cap changed the fingerprint inputs; the full rationale must still bind it")
+	}
+}
+
+func rationaleText(t *testing.T, prompt string) string {
+	t.Helper()
+	raw, ok := compactContextValue(t, prompt, "assistantRationale")
+	if !ok {
+		t.Fatal("prompt has no assistantRationale")
+	}
+	var value string
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		t.Fatalf("decode assistantRationale: %v", err)
+	}
+	return value
+}
+
+func hasFeature(features []string, want string) bool {
+	for _, feature := range features {
+		if feature == want {
+			return true
+		}
+	}
+	return false
+}

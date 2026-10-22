@@ -275,6 +275,11 @@ func connectionLabel(index int) string {
 
 const assessorOutputTokenReserve = 512
 
+// assistantRationalePromptLimit bounds the previous turn's reasoning in the
+// prompt. The audit and fingerprint keep the full text; the assessor only needs
+// the recent intent behind the command.
+const assistantRationalePromptLimit = 2000
+
 func modelContextFits(config AssessorConfig, model string, request ModelCallRequest) bool {
 	window, ok := config.ContextWindows[model]
 	if !ok || window <= 0 {
@@ -318,7 +323,7 @@ func buildModelCallRequest(request Request, ir ShellIR, options Options, config 
 		Goal:               optionalText(redact(request.Intent.Goal)),
 		LatestUserRequest:  optionalText(redact(request.Intent.LatestUserRequest)),
 		Purpose:            optionalText(redact(request.Intent.Purpose)),
-		AssistantRationale: optionalText(redact(request.Intent.AssistantRationale)),
+		AssistantRationale: optionalText(redact(promptRationaleTail(request.Intent.AssistantRationale, assistantRationalePromptLimit))),
 		WorkingDirectory:   request.CWD,
 		WorkspaceRoot:      cloneStringPointer(request.WorkspaceRoot),
 		OutsideWorkspace:   workspaceRelation(request),
@@ -451,6 +456,23 @@ func workspaceRelation(request Request) *bool {
 	}
 	outside := !pathWithin(request.CWD, *request.WorkspaceRoot)
 	return &outside
+}
+
+// promptRationaleTail keeps the most recent text within limit and starts at a
+// line boundary so the prompt never opens mid-word.
+func promptRationaleTail(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	tail := string(runes[len(runes)-limit:])
+	if index := strings.IndexByte(tail, '\n'); index >= 0 {
+		tail = tail[index+1:]
+	}
+	return tail
 }
 
 func optionalText(value string) *string {
