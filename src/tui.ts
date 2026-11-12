@@ -10,6 +10,35 @@ import {
   approvalPages,
 } from "./approval-text.ts";
 
+function errorMessage(error: unknown): string {
+  let message: string;
+  try {
+    if (error instanceof Error) message = error.message;
+    else if (error !== null && typeof error === "object") {
+      const detail = error as { type?: unknown; message?: unknown };
+      const seen = new WeakSet<object>();
+      let remaining = 20;
+      message =
+        [detail.type, detail.message]
+          .filter((value) => typeof value === "string" && value)
+          .join(": ") ||
+        JSON.stringify(error, (_key, value) => {
+          if (--remaining < 0) return "[Truncated]";
+          if (typeof value === "string") return value.slice(0, 300);
+          if (value !== null && typeof value === "object") {
+            if (seen.has(value)) return "[Circular]";
+            seen.add(value);
+          }
+          return value;
+        }) ||
+        "Unknown error";
+    } else message = String(error);
+  } catch {
+    message = "Error details could not be serialized";
+  }
+  return message.length > 300 ? `${message.slice(0, 297)}...` : message;
+}
+
 export default Plugin.define({
   id: "command-gate-tui",
   setup(ctx) {
@@ -20,6 +49,9 @@ export default Plugin.define({
     let disposed = false;
     let showing = false;
     let syncing = false;
+    let connected = false;
+    const startupDeadline = Date.now() + 30000;
+    let startupWarned = false;
     let active: string | null = null;
     let activeAlert: UnavailableAlert | null = null;
     let activeAlertDirectory: string | null = null;
@@ -30,7 +62,7 @@ export default Plugin.define({
     const unavailable = (error: unknown) =>
       ctx.ui.toast.show({
         title: "Command Gate approval unavailable",
-        message: String(error),
+        message: errorMessage(error),
         variant: "error",
       });
     const readText = async (title: string, message: string) => {
@@ -168,6 +200,7 @@ export default Plugin.define({
       syncing = true;
       try {
         await rpc.connect({ clientID });
+        connected = true;
         const status = (await rpc.status({})) as {
           healthy: boolean;
           reason: string | null;
@@ -247,7 +280,19 @@ export default Plugin.define({
           if (item) void show(item);
         }
       } catch (error) {
-        if (!disposed) unavailable(error);
+        const startupUnavailable =
+          !connected &&
+          error !== null &&
+          typeof error === "object" &&
+          "type" in error &&
+          error.type === "rpc.unavailable";
+        if (!disposed) {
+          if (!startupUnavailable) unavailable(error);
+          else if (!startupWarned && Date.now() >= startupDeadline) {
+            startupWarned = true;
+            unavailable(error);
+          }
+        }
         if (active || activeAlert) ctx.ui.dialog.clear();
       } finally {
         syncing = false;
