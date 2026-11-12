@@ -57,10 +57,10 @@
     "typecheck": "tsc --noEmit",
     "format:check": "prettier --check 'src/**/*.ts' 'test/**/*.mjs' '*.ts' '*.json'"
   },
-  "//": "Pins verified 2026-10-03 against registry.npmjs.org: @opencode/plugin must equal the host version (2.0.22) and declares effect 4.0.0-rc.112 itself, so both stay exact here.",
+  "//": "Pins verified 2026-11-12 against registry.npmjs.org: @opencode/plugin must equal the host version (2.2.7) and declares effect 4.1.0 itself, so both stay exact here.",
   "dependencies": {
-    "@opencode/plugin": "2.0.22",
-    "effect": "4.0.0-rc.112"
+    "@opencode/plugin": "2.2.7",
+    "effect": "4.1.0"
   },
   "devDependencies": {
     "@types/node": "26.6.4",
@@ -70,6 +70,6 @@
   },
   "engines": {
     "node": ">=24",
-    "opencode": "2.0.22"
+    "opencode": "2.2.7"
   }
 }
